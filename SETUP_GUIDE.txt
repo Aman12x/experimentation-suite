@@ -1,0 +1,164 @@
+# 🔬 Experimentation & Causal Analysis Suite
+
+## 📦 What's Included
+
+This ZIP contains a complete, production-ready A/B testing and causal inference platform.
+
+### Files Structure:
+```
+experimentation-suite/
+├── app.py                          # Main Streamlit application
+├── requirements.txt                # Python dependencies
+├── demo.py                         # Standalone demo (no UI)
+├── README.md                       # Full documentation
+├── QUICKSTART.md                   # 5-minute setup guide
+├── ARCHITECTURE.md                 # System design docs
+│
+├── modules/                        # Core business logic
+│   ├── __init__.py
+│   ├── data_handler.py            # Data loading & validation
+│   ├── ab_testing.py              # Statistical tests
+│   ├── causal_inference.py        # PSM, DiD, IV methods
+│   ├── health_checks.py           # Quality assurance
+│   └── visualizations.py          # Plotly charts
+│
+├── utils/                          # Utilities
+│   ├── __init__.py
+│   ├── interpreters.py            # Plain English explanations
+│   └── report_generator.py        # Export functionality
+│
+└── Sample Data/                    # Test datasets
+    ├── sample_ab_test_data.csv    # General A/B test (2K rows)
+    ├── sample_did_data.csv        # DiD analysis (2K rows)
+    └── ecommerce_ab_test.csv      # E-commerce funnel (2.5K rows)
+```
+
+## 🚀 Quick Start (5 minutes)
+
+### Step 1: Extract Files
+Extract this ZIP to a folder of your choice
+
+### Step 2: Install Dependencies
+```bash
+# Open terminal in the extracted folder
+pip install -r requirements.txt
+```
+
+### Step 3: Run the App
+```bash
+streamlit run app.py
+```
+
+Your browser will open to http://localhost:8501
+
+### Step 4: Try It Out
+1. Click "Browse files" in the sidebar
+2. Upload `sample_ab_test_data.csv`
+3. Go to "A/B Testing" tab
+4. Select:
+   - Group: `group`
+   - Metric: `revenue`
+   - Test: `T-Test`
+5. Click "Run A/B Test"
+
+## 📊 Sample Datasets Explained
+
+### 1. sample_ab_test_data.csv (2,000 users)
+**General A/B Test**
+- Control vs Treatment (50/50)
+- Revenue shows ~11% lift
+- Conversion shows ~16% relative lift
+- All integer values (age, revenue, sessions, etc.)
+
+### 2. sample_did_data.csv (2,000 observations)
+**Difference-in-Differences**
+- Store-level panel data
+- Pre/Post periods (2023/2024)
+- Treatment effect: ~180 units
+- Perfect for causal inference demo
+
+### 3. ecommerce_ab_test.csv (2,500 users)
+**E-commerce Funnel**
+- Multiple metrics: conversion, revenue, email signups
+- Funnel: pages → products → cart → purchase
+- Device types, traffic sources
+- Most realistic dataset
+
+## 💡 What You Can Do
+
+### A/B Testing
+✅ T-tests, Z-tests, Chi-squared tests
+✅ Bayesian A/B testing
+✅ Power analysis & sample size calculation
+✅ Effect size metrics (Cohen's d)
+
+### Causal Inference
+✅ Propensity Score Matching (PSM)
+✅ Difference-in-Differences (DiD)
+✅ Instrumental Variables (IV/2SLS)
+✅ Balance diagnostics
+
+### Quality Assurance
+✅ Sample Ratio Mismatch detection
+✅ Outlier analysis
+✅ Variance checks
+✅ Normality testing
+
+### Outputs
+✅ Interactive Plotly visualizations
+✅ Plain English interpretations
+✅ Excel/Markdown/HTML reports
+
+## 🆘 Troubleshooting
+
+### "streamlit: command not found"
+```bash
+pip install --upgrade streamlit
+```
+
+### "ModuleNotFoundError: No module named 'scipy'"
+```bash
+pip install --upgrade -r requirements.txt
+```
+
+### Port already in use
+```bash
+streamlit run app.py --server.port 8502
+```
+
+### Can't see modules folder
+The ZIP contains folders! Make sure you:
+1. Extract the ENTIRE ZIP (not just some files)
+2. Extract to a folder (not just "open" the ZIP)
+3. Check that `modules/` and `utils/` folders exist
+
+## 📚 Documentation
+
+- **QUICKSTART.md** - Get started in 5 minutes
+- **README.md** - Full documentation with examples
+- **ARCHITECTURE.md** - Technical design details
+
+## 🎯 For Your Resume
+
+This project demonstrates:
+- Statistical rigor (hypothesis testing, causal inference)
+- Software engineering (modular design, clean code)
+- Product thinking (UX, stakeholder communication)
+- End-to-end ownership (data → analysis → insights → export)
+
+See README.md for sample resume bullet points.
+
+## 📞 No Internet? No Problem!
+
+Run the **demo.py** file without any installation:
+```bash
+python3 demo.py
+```
+
+This runs core statistical functions using only basic Python libraries.
+
+---
+
+**Need help?** Check README.md for detailed documentation or run `demo.py` to see examples.
+
+Enjoy your experimentation platform! 🔬📊
