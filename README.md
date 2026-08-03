@@ -6,7 +6,7 @@
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](tests/)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg)](Dockerfile)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/Aman12x/experimentation-suite/pulls)
 
 > Professional A/B testing & causal inference platform with automated health checks, Bayesian analysis, and plain-English business interpretations
 
@@ -57,7 +57,7 @@
 
 ```bash
 # Pull and run the Docker container
-docker pull your-username/experimentation-suite:latest
+docker build -t experimentation-suite .
 docker run -p 8501:8501 -p 8000:8000 experimentation-suite
 
 # Access the app
@@ -69,7 +69,7 @@ docker run -p 8501:8501 -p 8000:8000 experimentation-suite
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/experimentation-suite.git
+git clone https://github.com/Aman12x/experimentation-suite.git
 cd experimentation-suite
 
 # Install dependencies
@@ -183,8 +183,6 @@ docker-compose down
 
 - **[QUICKSTART.md](QUICKSTART.md)** - Get started in 5 minutes
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - Technical design details
-- **[API_DOCS.md](API_DOCS.md)** - REST API documentation
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Contribution guidelines
 
 ---
 
@@ -262,8 +260,6 @@ experimentation-suite/
 ├── tests/                      # Unit & integration tests
 │   ├── __init__.py
 │   ├── test_ab_testing.py
-│   ├── test_causal_inference.py
-│   ├── test_health_checks.py
 │   ├── test_api.py
 │   └── conftest.py            # Pytest fixtures
 │
@@ -307,7 +303,7 @@ STREAMLIT_PORT=8501
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome! Feel free to open an issue or pull request.
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
@@ -367,7 +363,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🌟 Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=your-username/experimentation-suite&type=Date)](https://star-history.com/#your-username/experimentation-suite&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Aman12x/experimentation-suite&type=Date)](https://star-history.com/#Aman12x/experimentation-suite&Date)
 
 ---
 

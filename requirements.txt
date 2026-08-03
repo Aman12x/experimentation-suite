@@ -16,15 +16,11 @@ scipy
 statsmodels
 
 # Causal Inference
-dowhy
-causalml
 scikit-learn
 
 # Visualization
 plotly
 
-# Bayesian Analysis
-pymc
 
 # Utilities
 openpyxl
