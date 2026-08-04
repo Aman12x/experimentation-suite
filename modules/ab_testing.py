@@ -39,6 +39,8 @@ class ABTestingEngine:
         """
         # Perform t-test
         t_stat, p_value = stats.ttest_ind(treatment, control, alternative=alternative)
+        if np.isnan(p_value):  # zero variance in both groups (e.g. identical arrays)
+            t_stat, p_value = 0.0, 1.0
         
         # Calculate statistics
         control_mean = np.mean(control)
@@ -65,7 +67,7 @@ class ABTestingEngine:
         return {
             'test_type': 't-test',
             't_statistic': t_stat,
-            'p_value': p_value,
+            'p_value': float(p_value),
             'control_mean': control_mean,
             'treatment_mean': treatment_mean,
             'control_std': np.std(control, ddof=1),
@@ -77,7 +79,7 @@ class ABTestingEngine:
             'ci_lower': ci_lower,
             'ci_upper': ci_upper,
             'relative_lift': relative_lift,
-            'significant': p_value < alpha,
+            'significant': bool(p_value < alpha),
             'alpha': alpha
         }
     
@@ -131,7 +133,7 @@ class ABTestingEngine:
         return {
             'test_type': 'z-test',
             'z_statistic': z_stat,
-            'p_value': p_value,
+            'p_value': float(p_value),
             'control_mean': control_mean,
             'treatment_mean': treatment_mean,
             'control_std': control_std,
@@ -143,7 +145,7 @@ class ABTestingEngine:
             'ci_lower': ci_lower,
             'ci_upper': ci_upper,
             'relative_lift': relative_lift,
-            'significant': p_value < alpha,
+            'significant': bool(p_value < alpha),
             'alpha': alpha
         }
     
@@ -197,7 +199,7 @@ class ABTestingEngine:
         return {
             'test_type': 'chi-squared',
             'chi2_statistic': chi2,
-            'p_value': p_value,
+            'p_value': float(p_value),
             'degrees_of_freedom': dof,
             'control_rate': control_rate,
             'treatment_rate': treatment_rate,
@@ -207,7 +209,7 @@ class ABTestingEngine:
             'ci_lower': ci_lower,
             'ci_upper': ci_upper,
             'relative_lift': relative_lift,
-            'significant': p_value < alpha,
+            'significant': bool(p_value < alpha),
             'alpha': alpha
         }
     
