@@ -146,3 +146,37 @@ def test_event_study_needs_two_pre_periods():
     df = quarterly_panel(np.random.default_rng(2), n_stores=20)
     with pytest.raises(ValueError, match="two pre-treatment periods"):
         CausalInferenceLab().event_study(df, 'region', ['year', 'quarter'], 'sales', 'treatment', (2023, 2))
+
+
+# =============== TRIMMED RESULT OBJECTS ===============
+# Found by a real agent run: it passed trimmed results without 'mean_difference', and the
+# decision read the missing direction as zero and called a +4.7% win "significantly worse".
+
+@pytest.mark.unit
+def test_direction_is_derived_when_mean_difference_is_missing(engine):
+    rng = np.random.default_rng(8)
+    win = result(engine, rng, 100, 105)
+    slower = result(engine, rng, 800, 900)
+    trim = lambda r: {k: r[k] for k in ('control_mean', 'treatment_mean', 'p_value', 'significant', 'relative_lift')}
+    
+    full = ship_decision(win, guardrails={'latency': slower}, guardrail_higher_is_better={'latency': False})
+    trimmed = ship_decision(trim(win), guardrails={'latency': trim(slower)},
+                            guardrail_higher_is_better={'latency': False})
+    assert trimmed['decision'] == full['decision'] == DO_NOT_SHIP
+    assert trimmed['harmed_guardrails'] == ['latency']
+    assert "got significantly worse" not in " ".join(r for r in trimmed['reasons'] if 'Primary' in r)
+    
+    assert ship_decision(trim(win))['decision'] == SHIP
+
+
+@pytest.mark.unit
+def test_results_without_a_direction_are_rejected_not_guessed(engine):
+    with pytest.raises(ValueError, match="unmodified"):
+        ship_decision({'p_value': 0.01, 'significant': True, 'relative_lift': 4.7})
+    with pytest.raises(ValueError, match="p_value"):
+        ship_decision({'mean_difference': 1.0, 'significant': True})
+    with pytest.raises(ValueError, match="guardrail 'latency'"):
+        ship_decision({'mean_difference': 1.0, 'p_value': 0.01}, guardrails={'latency': {'p_value': 0.01}})
+    
+    derived = ship_decision({'mean_difference': 1.0, 'p_value': 0.01})       # significance from p-value
+    assert derived['decision'] == SHIP

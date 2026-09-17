@@ -240,8 +240,9 @@ def decide_with_guardrails(
 ) -> Dict[str, Any]:
     """Combine a primary metric with guardrail metrics into one ship decision.
 
-    Run analyze_experiment once per metric, then pass each comparison's 'result' object here:
-    primary is the decision metric, guardrails maps a metric name to its result.
+    Run analyze_experiment once per metric, then pass each comparison's 'result' object here,
+    unmodified: primary is the decision metric, guardrails maps a metric name to its result.
+    Do not trim or rebuild the objects; the direction of each effect is read from them.
     guardrail_higher_is_better marks direction per guardrail (false for latency, errors,
     refunds). A guardrail that moved significantly the wrong way blocks shipping.
     """

@@ -15,12 +15,39 @@ STOP_NO_EFFECT = "STOP - NO MEANINGFUL EFFECT"
 INVALID = "INVALID - FIX THE EXPERIMENT"
 
 
+def _checked(result: Dict, name: str) -> Dict:
+    """
+    A result the decision can rely on: significance, p-value and the direction of the effect.
+    
+    Callers (agents especially) sometimes pass a trimmed copy of a result. Guessing a missing
+    direction as zero once turned a significant +4.7% win into "significantly worse", so a
+    missing field is derived from what is there or rejected, never assumed.
+    """
+    if not isinstance(result, dict):
+        raise ValueError(f"{name} must be a result object from one of the tests")
+    result = dict(result)
+    
+    if result.get('mean_difference') is None:
+        control, treatment = result.get('control_mean'), result.get('treatment_mean')
+        if control is None or treatment is None:
+            raise ValueError(
+                f"{name} has no 'mean_difference' and no 'control_mean' / 'treatment_mean' to derive it from. "
+                "Pass the test's result object unmodified."
+            )
+        result['mean_difference'] = treatment - control
+    
+    if result.get('p_value') is None:
+        raise ValueError(f"{name} has no 'p_value'. Pass the test's result object unmodified.")
+    if result.get('significant') is None:
+        result['significant'] = bool(result['p_value'] < result.get('alpha', 0.05))
+    return result
+
+
 def _harmful(result: Dict, higher_is_better: bool) -> bool:
     """A metric moved significantly in the wrong direction"""
-    if not result.get('significant'):
+    if not result['significant'] or result['mean_difference'] == 0:
         return False
-    moved_up = result.get('mean_difference', 0) > 0
-    return moved_up != higher_is_better
+    return (result['mean_difference'] > 0) != higher_is_better
 
 
 def ship_decision(
@@ -51,7 +78,8 @@ def ship_decision(
         guardrail_higher_is_better: Direction per guardrail (default: higher is better)
         mde_pct: Smallest relative lift worth shipping, in percent
     """
-    guardrails = guardrails or {}
+    primary = _checked(primary, 'primary')
+    guardrails = {name: _checked(r, f"guardrail '{name}'") for name, r in (guardrails or {}).items()}
     directions = guardrail_higher_is_better or {}
     reasons: List[str] = []
     
