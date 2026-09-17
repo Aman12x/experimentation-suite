@@ -32,6 +32,12 @@ def as_clean_array(values: Sequence, name: str) -> np.ndarray:
     return array
 
 
+BOOTSTRAP_MAX_UNITS = 400_000          # beyond this Welch and the bootstrap agree; refuse rather than hang
+BOOTSTRAP_DRAW_BUDGET = 1_000_000_000   # total random draws per call
+BOOTSTRAP_CHUNK_CELLS = 2_000_000      # ~16 MB of indices held at once
+
+MAX_MEANINGFUL_LIFT_PCT = 1_000_000
+
 LIFT_UNDEFINED_NOTE = (
     "Relative lift is not reported because the control mean is zero, negative, or too close to "
     "zero to divide by reliably. Use the absolute difference."
@@ -58,12 +64,17 @@ def relative_lift_fields(
     if not np.isfinite(control_mean) or control_mean <= 0 or control_mean <= 2 * se_control:
         return {'relative_lift': None, 'relative_lift_note': LIFT_UNDEFINED_NOTE}
     
-    fields = {'relative_lift': float((treatment_mean / control_mean - 1) * 100)}
-    if control_var_of_mean is not None and treatment_var_of_mean is not None:
-        interval = relative_lift_interval(
-            control_mean, treatment_mean, control_var_of_mean, treatment_var_of_mean, alpha
-        )
-        fields.update(lift_ci_lower=interval['lift_ci_lower'], lift_ci_upper=interval['lift_ci_upper'])
+    with np.errstate(all='ignore'):
+        fields = {'relative_lift': float((treatment_mean / control_mean - 1) * 100)}
+        if control_var_of_mean is not None and treatment_var_of_mean is not None:
+            interval = relative_lift_interval(
+                control_mean, treatment_mean, control_var_of_mean, treatment_var_of_mean, alpha
+            )
+            fields.update(lift_ci_lower=interval['lift_ci_lower'], lift_ci_upper=interval['lift_ci_upper'])
+    
+    # A baseline so small that the ratio overflows or reads as millions of percent is not a baseline
+    if not all(np.isfinite(v) for v in fields.values()) or abs(fields['relative_lift']) > MAX_MEANINGFUL_LIFT_PCT:
+        return {'relative_lift': None, 'relative_lift_note': LIFT_UNDEFINED_NOTE}
     return fields
 
 
@@ -183,6 +194,71 @@ class AdvancedABMethods:
             'alpha': alpha
         }
 
+    def ratio_metric_test(
+        self,
+        control_numerator: np.ndarray,
+        control_denominator: np.ndarray,
+        treatment_numerator: np.ndarray,
+        treatment_denominator: np.ndarray,
+        alpha: float = 0.05
+    ) -> Dict:
+        """
+        Delta-method test for ratio metrics such as revenue per session or clicks per view
+        
+        The business metric is sum(numerator) / sum(denominator) within an arm.
+        Averaging each unit's own ratio answers a different question (it
+        down-weights heavy users), and treating sessions as independent units
+        understates the variance. The delta method keeps the unit of
+        randomization as the unit of analysis and still targets the ratio of sums.
+        
+        Args:
+            control_numerator: Per-unit numerator totals in control (e.g. revenue per user)
+            control_denominator: Per-unit denominator totals in control (e.g. sessions per user)
+            treatment_numerator: Per-unit numerator totals in treatment
+            treatment_denominator: Per-unit denominator totals in treatment
+            alpha: Significance level
+        """
+        def arm(numerator, denominator, name):
+            num = as_clean_array(numerator, f'{name} numerator')
+            den = as_clean_array(denominator, f'{name} denominator')
+            if len(num) != len(den):
+                raise ValueError(f"{name}: numerator and denominator must have one value per unit each")
+            if len(num) < 2:
+                raise ValueError(f"{name}: need at least two units")
+            mean_den = den.mean()
+            if mean_den <= 0:
+                raise ValueError(f"{name}: denominator must be positive on average")
+            ratio = num.mean() / mean_den
+            cov = np.cov(num, den, ddof=1)
+            # Var(N/D) ≈ [Var(N) - 2R·Cov(N,D) + R²·Var(D)] / (n · mean(D)²)
+            variance = (cov[0, 0] - 2 * ratio * cov[0, 1] + ratio**2 * cov[1, 1]) / (len(num) * mean_den**2)
+            return ratio, max(float(variance), 0.0), len(num)
+        
+        ratio_c, var_c, n_c = arm(control_numerator, control_denominator, 'control')
+        ratio_t, var_t, n_t = arm(treatment_numerator, treatment_denominator, 'treatment')
+        
+        diff = ratio_t - ratio_c
+        se = np.sqrt(var_c + var_t)
+        z_stat = diff / se if se > 0 else 0.0
+        p_value = 2 * stats.norm.sf(abs(z_stat)) if se > 0 else 1.0
+        half_width = stats.norm.ppf(1 - alpha/2) * se
+        
+        return {
+            'test_type': 'ratio metric (delta method)',
+            'z_statistic': float(z_stat),
+            'p_value': float(p_value),
+            'control_mean': float(ratio_c),
+            'treatment_mean': float(ratio_t),
+            'control_n': int(n_c),
+            'treatment_n': int(n_t),
+            'mean_difference': float(diff),
+            'ci_lower': float(diff - half_width),
+            'ci_upper': float(diff + half_width),
+            **relative_lift_fields(ratio_c, ratio_t, var_c, var_t, alpha),
+            'significant': bool(p_value < alpha),
+            'alpha': alpha
+        }
+    
     def cuped_test(
         self,
         control: np.ndarray,
@@ -308,10 +384,31 @@ class AdvancedABMethods:
         if len(control) < 2 or len(treatment) < 2:
             raise ValueError("Bootstrap needs at least two observations per group")
 
+        total = len(control) + len(treatment)
+        if total > BOOTSTRAP_MAX_UNITS:
+            raise ValueError(
+                f"Bootstrap is limited to {BOOTSTRAP_MAX_UNITS:,} units in total ({total:,} given). "
+                "At this size the sampling distribution of the mean is normal to a very good "
+                "approximation, so Welch's t-test gives the same answer in a fraction of the time."
+            )
+        # Keep total work bounded: fewer resamples for larger samples, never below 1,000
+        n_resamples = int(max(1000, min(n_resamples, BOOTSTRAP_DRAW_BUDGET // max(total, 1))))
+        
         rng = np.random.default_rng(seed)
-        boot_c = rng.choice(control, (n_resamples, len(control))).mean(axis=1)
-        boot_t = rng.choice(treatment, (n_resamples, len(treatment))).mean(axis=1)
-
+        
+        def resampled_means(values: np.ndarray) -> np.ndarray:
+            # Resample in chunks so memory stays flat instead of n_resamples x n
+            chunk = max(1, BOOTSTRAP_CHUNK_CELLS // len(values))
+            means = np.empty(n_resamples)
+            for start in range(0, n_resamples, chunk):
+                stop = min(start + chunk, n_resamples)
+                index = rng.integers(0, len(values), size=(stop - start, len(values)))
+                means[start:stop] = values[index].mean(axis=1)
+            return means
+        
+        boot_c = resampled_means(control)
+        boot_t = resampled_means(treatment)
+        
         diffs = boot_t - boot_c
         ci_lower, ci_upper = np.percentile(diffs, [100 * alpha/2, 100 * (1 - alpha/2)])
 

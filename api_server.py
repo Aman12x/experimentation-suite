@@ -157,6 +157,15 @@ class TwoSampleRequest(BaseModel):
     alpha: float = Field(0.05, ge=0.01, le=0.10)
 
 
+class RatioMetricRequest(BaseModel):
+    """Request model for ratio metrics (one numerator and one denominator total per unit)"""
+    control_numerator: List[float] = Field(..., min_length=2, description="e.g. revenue per user")
+    control_denominator: List[float] = Field(..., min_length=2, description="e.g. sessions per user")
+    treatment_numerator: List[float] = Field(..., min_length=2)
+    treatment_denominator: List[float] = Field(..., min_length=2)
+    alpha: float = Field(0.05, ge=0.01, le=0.10)
+
+
 class CupedRequest(BaseModel):
     """Request model for CUPED variance reduction"""
     control: List[float] = Field(..., min_length=2)
@@ -294,6 +303,7 @@ async def root():
             "mann-whitney": "/api/ab-test/mann-whitney",
             "bootstrap": "/api/ab-test/bootstrap",
             "cuped": "/api/ab-test/cuped",
+            "ratio-metric": "/api/ab-test/ratio-metric",
             "multi-variant": "/api/ab-test/multi-variant",
             "sequential": "/api/ab-test/sequential",
             "health-check": "/api/health-check",
@@ -443,6 +453,12 @@ async def run_bootstrap(request: TwoSampleRequest):
         "bootstrap", get_ab_engine().bootstrap_test,
         np.array(request.control), np.array(request.treatment), alpha=request.alpha
     )
+
+
+@app.post("/api/ab-test/ratio-metric")
+async def run_ratio_metric(request: RatioMetricRequest):
+    """Delta-method test for a ratio of totals, e.g. revenue per session with users randomized"""
+    return _run("ratio-metric", get_ab_engine().ratio_metric_test, **request.model_dump())
 
 
 @app.post("/api/ab-test/cuped")

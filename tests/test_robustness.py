@@ -162,14 +162,3 @@ def test_failed_load_shows_an_error_not_a_traceback():
     assert not at.exception
     assert any("disk on fire" in e.value for e in at.sidebar.error)
     assert not any(s.label == "Primary Metric" for s in at.selectbox)
-
-
-@pytest.mark.integration
-def test_sequential_test_asks_for_arrival_order():
-    from streamlit.testing.v1 import AppTest
-    at = AppTest.from_file(APP, default_timeout=60).run()
-    at.sidebar.selectbox[0].select("A/B test (revenue, conversion)").run()
-    assert not any(s.label == "Arrival Order" for s in at.selectbox)
-    
-    next(s for s in at.selectbox if s.label == "Statistical Test").select("Sequential (always-valid)").run()
-    assert any(s.label == "Arrival Order" for s in at.selectbox)

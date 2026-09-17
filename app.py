@@ -18,12 +18,13 @@ from modules import (
 from modules.ab_advanced import is_binary_metric, format_change
 from modules.experiment_design import (
     ROW_IS_UNIT, guess_unit_column, guess_assignment_column, guess_control_label,
-    metric_candidates, describe_metric, to_unit_level, experiment_summary
+    metric_candidates, describe_metric, to_unit_level, experiment_summary, guess_time_column
 )
 from utils import StatisticalInterpreter, ReportGenerator, ship_decision
 
 BINARY_ONLY_TESTS = ('Proportions Z-Test', 'Chi-Squared', 'Bayesian')
 AUTO_TEST = 'Auto (recommended for this metric)'
+RATIO_TEST = 'Ratio Metric (delta method)'
 TEST_TYPES = [
     'T-Test', 'Z-Test', 'Proportions Z-Test', 'Chi-Squared', 'Bayesian',
     'Mann-Whitney U', 'Bootstrap', 'CUPED (variance reduction)', 'Sequential (always-valid)'
@@ -298,6 +299,18 @@ def render_ab_tab():
                 help="The column recording which arm each unit was assigned to"
             )
         
+        NO_TIME = "(no timestamp)"
+        time_options = [NO_TIME] + [c for c in all_columns if c not in (unit_col, group_col)]
+        time_guess = guess_time_column(data, exclude=(unit_col, group_col))
+        time_choice = st.selectbox(
+            "Exposure Timestamp (optional)",
+            options=time_options,
+            index=time_options.index(time_guess) if time_guess in time_options else 0,
+            help="When each unit first entered the experiment. Enables the by-day traffic split check, "
+                 "the full-weeks check, and correct ordering for sequential tests."
+        )
+        time_col = None if time_choice == NO_TIME else time_choice
+        
         group_values = data[group_col].dropna().unique().tolist() if group_col else []
         
         a_col1, a_col2 = st.columns(2)
@@ -378,7 +391,7 @@ def render_ab_tab():
             "is based on. Everything else is a guardrail or context."
         )
         
-        metric_options = metric_candidates(data, unit_col, group_col)
+        metric_options = [c for c in metric_candidates(data, unit_col, group_col) if c != time_col]
         m_col1, m_col2 = st.columns(2)
         with m_col1:
             metric_col = st.selectbox(
@@ -394,7 +407,28 @@ def render_ab_tab():
                 help="Up for conversion or revenue. Down for churn, latency, or error rate."
             )
         
+        ratio_denominator = None
+        if st.checkbox(
+            "This metric is a ratio of two columns (e.g. revenue per session, clicks per view)",
+            help="The business number is total numerator / total denominator. Averaging each unit's own "
+                 "ratio down-weights heavy users and answers a different question."
+        ):
+            ratio_denominator = st.selectbox(
+                "Denominator Column",
+                options=[c for c in metric_options if c != metric_col],
+                help=f"The metric becomes total {metric_col} / total of this column, per arm"
+            )
+        
         metric_info = describe_metric(data[metric_col]) if metric_col else None
+        if ratio_denominator:
+            metric_info = {
+                'kind': 'ratio',
+                'recommended_test': RATIO_TEST,
+                'summary': f"divided by **{ratio_denominator}**, so the quantity compared is the "
+                           f"**ratio of totals** ({data[metric_col].sum() / data[ratio_denominator].sum():,.4g} overall)",
+                'reason': "The delta method tests a ratio of totals while keeping the randomized unit "
+                          "as the unit of analysis."
+            }
         if metric_info:
             st.markdown(f"📐 **{metric_col}** is {metric_info['summary']}.")
         
@@ -443,7 +477,10 @@ def render_ab_tab():
             help="Auto picks the test that matches the metric's type. Override only if you have a reason."
         )
         test_type = metric_info['recommended_test'] if test_choice == AUTO_TEST and metric_info else test_choice
-        if test_choice == AUTO_TEST and metric_info:
+        if ratio_denominator and test_type != RATIO_TEST:
+            st.warning(f"⚠️ Ratio metrics are analyzed with the delta method. Ignoring **{test_choice}**.")
+            test_type = RATIO_TEST
+        if metric_info and (test_choice == AUTO_TEST or ratio_denominator):
             st.markdown(f"🧭 Using **{test_type}**. {metric_info['reason']}")
         elif metric_info and test_type in BINARY_ONLY_TESTS and metric_info['kind'] != 'binary':
             st.error(f"❌ {test_type} needs a yes/no (0/1) metric. **{metric_col}** is not one.")
@@ -453,22 +490,13 @@ def render_ab_tab():
                 "is the standard choice for rates."
             )
         
-        order_col = None
-        if test_type == 'Sequential (always-valid)':
-            ROWS_IN_ORDER = "(rows are already in arrival order)"
-            time_like = [c for c in all_columns if any(k in c.lower() for k in ('time', 'date', 'ts', 'created', 'exposed'))]
-            order_options = [ROWS_IN_ORDER] + [c for c in all_columns if c not in (group_col, metric_col)]
-            order_choice = st.selectbox(
-                "Arrival Order",
-                options=order_options,
-                index=order_options.index(time_like[0]) if time_like and time_like[0] in order_options else 0,
-                help="A sequential test replays the experiment as data arrived, so it needs to know the order. "
-                     "Pick the exposure timestamp, or confirm the rows are already sorted by time."
+        order_col = time_col
+        if test_type == 'Sequential (always-valid)' and time_col is None:
+            st.warning(
+                "⚠️ A sequential test replays the experiment in arrival order. No exposure timestamp is set "
+                "in step 1, so the file's row order is assumed to be arrival order."
             )
-            order_col = None if order_choice == ROWS_IN_ORDER else order_choice
-            if order_col is None:
-                st.caption("⚠️ Interim looks are only meaningful if the file really is sorted by arrival time.")
-
+        
         cuped_covariate = None
         if test_type == 'CUPED (variance reduction)':
             cuped_covariate = st.selectbox(
@@ -515,7 +543,7 @@ def render_ab_tab():
                 n_units=sum(arm_counts.values()),
                 arms=arm_counts,
                 control=str(control_group),
-                metric=metric_col,
+                metric=f"{metric_col} / {ratio_denominator}" if ratio_denominator else metric_col,
                 metric_kind=metric_info['kind'],
                 higher_is_better=primary_direction == '▲ Up',
                 mde_pct=mde_pct if mde_pct > 0 else None,
@@ -541,9 +569,10 @@ def render_ab_tab():
         else:
             with st.spinner("Running analysis..."):
                 # Prepare data
-                extra_cols = [c for c in [cuped_covariate] + guardrail_cols if c]
+                extra_cols = [c for c in [cuped_covariate, ratio_denominator] + guardrail_cols if c]
                 unit_df, unit_info = to_unit_level(
-                    data, unit_col, group_col, [metric_col] + extra_cols, agg=agg, order_col=order_col
+                    data, unit_col, group_col, [metric_col] + extra_cols, order_col=order_col,
+                    agg={metric_col: 'sum', ratio_denominator: 'sum'} if ratio_denominator else agg
                 )
                 if unit_info['n_contaminated_units']:
                     st.warning(
@@ -557,7 +586,9 @@ def render_ab_tab():
                     )
                 full = unit_df.dropna(subset=[group_col, metric_col])
                 n_groups = full[group_col].nunique()
-                multi = compare_all and n_groups > 2
+                multi = compare_all and n_groups > 2 and not ratio_denominator
+                if compare_all and n_groups > 2 and ratio_denominator:
+                    st.info("ℹ️ Ratio metrics are compared one variant at a time; the all-variants table is skipped.")
                 
                 df = full if multi else full[full[group_col].isin([control_group, treatment_group])]
                 if n_groups > 2 and not multi:
@@ -570,7 +601,8 @@ def render_ab_tab():
                 st.subheader("🏥 Health Checks")
                 health_results = st.session_state.health_checker.run_all_checks(
                     df, group_col, metric_col,
-                    expected_ratio={a: expected_split[str(a)] for a in arms_in_test}
+                    expected_ratio={a: expected_split[str(a)] for a in arms_in_test},
+                    time_col=time_col
                 )
                 
                 if health_results['overall_health']:
@@ -626,7 +658,15 @@ def render_ab_tab():
                         treatment_rows = treatment_rows.dropna(subset=[cuped_covariate])
                         control_data = control_rows[metric_col].values
                         treatment_data = treatment_rows[metric_col].values
-                    results = run_selected_test(
+                    if ratio_denominator:
+                        control_rows = control_rows.dropna(subset=[ratio_denominator])
+                        treatment_rows = treatment_rows.dropna(subset=[ratio_denominator])
+                        control_data = control_rows[metric_col].values
+                        treatment_data = treatment_rows[metric_col].values
+                    results = st.session_state.ab_engine.ratio_metric_test(
+                        control_data, control_rows[ratio_denominator].values,
+                        treatment_data, treatment_rows[ratio_denominator].values, alpha=alpha
+                    ) if ratio_denominator else run_selected_test(
                         st.session_state.ab_engine, test_type, control_data, treatment_data, alpha,
                         equal_var=assume_equal_var,
                         control_cov=control_rows[cuped_covariate].values if cuped_covariate else None,

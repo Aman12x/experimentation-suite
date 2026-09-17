@@ -58,8 +58,12 @@ class ABTestingEngine(AdvancedABMethods):
         t_stat, p_value = stats.ttest_ind(
             treatment, control, alternative=alternative, equal_var=equal_var
         )
-        if np.isnan(p_value):  # zero variance in both groups (e.g. identical arrays)
-            t_stat, p_value = 0.0, 1.0
+        zero_variance = not np.isfinite(t_stat) or np.isnan(p_value)
+        if zero_variance:
+            # No spread in either arm. Identical constants: nothing to detect. Different
+            # constants: the arms differ with certainty, and the t statistic is unbounded.
+            same = np.mean(treatment) == np.mean(control)
+            t_stat, p_value = (0.0, 1.0) if same else (None, 0.0)
         
         # Calculate statistics
         control_mean = np.mean(control)
@@ -95,8 +99,9 @@ class ABTestingEngine(AdvancedABMethods):
         return {
             'test_type': 't-test',
             'variant': 'student' if equal_var else 'welch',
-            't_statistic': float(t_stat),
+            't_statistic': None if t_stat is None else float(t_stat),
             'p_value': float(p_value),
+            'zero_variance': bool(zero_variance),
             'degrees_of_freedom': float(df),
             'control_mean': float(control_mean),
             'treatment_mean': float(treatment_mean),
@@ -147,13 +152,18 @@ class ABTestingEngine(AdvancedABMethods):
         
         # Z-statistic
         se = np.sqrt((control_std**2 / len(control)) + (treatment_std**2 / len(treatment)))
-        z_stat = (treatment_mean - control_mean) / se if se > 0 else 0.0
+        zero_variance = not se > 0
+        z_stat = (treatment_mean - control_mean) / se if se > 0 else (0.0 if treatment_mean == control_mean else None)
         
         # P-value based on alternative hypothesis
-        if alternative == 'two-sided':
-            p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))
+        if z_stat is None:
+            # Constant arms with different values: the difference is certain
+            went_up = treatment_mean > control_mean
+            p_value = 0.0 if alternative == 'two-sided' or went_up == (alternative == 'greater') else 1.0
+        elif alternative == 'two-sided':
+            p_value = 2 * stats.norm.sf(abs(z_stat))
         elif alternative == 'greater':
-            p_value = 1 - stats.norm.cdf(z_stat)
+            p_value = stats.norm.sf(z_stat)
         else:  # 'less'
             p_value = stats.norm.cdf(z_stat)
         
@@ -168,8 +178,9 @@ class ABTestingEngine(AdvancedABMethods):
         
         return {
             'test_type': 'z-test',
-            'z_statistic': float(z_stat),
+            'z_statistic': None if z_stat is None else float(z_stat),
             'p_value': float(p_value),
+            'zero_variance': bool(zero_variance),
             'control_mean': float(control_mean),
             'treatment_mean': float(treatment_mean),
             'control_std': float(control_std),
@@ -221,7 +232,11 @@ class ABTestingEngine(AdvancedABMethods):
         ])
         
         # Chi-squared test
-        chi2, p_value, dof, expected = stats.chi2_contingency(observed)
+        if (observed.sum(axis=0) == 0).any():
+            # Every unit succeeded, or none did: the arms are identical and there is nothing to test
+            chi2, p_value, dof = 0.0, 1.0, 1
+        else:
+            chi2, p_value, dof, expected = stats.chi2_contingency(observed)
         
         # Proportions
         control_rate = control_success / control_total
@@ -251,6 +266,7 @@ class ABTestingEngine(AdvancedABMethods):
             'control_n': int(control_total),
             'treatment_n': int(treatment_total),
             'rate_difference': float(diff),
+            'mean_difference': float(diff),
             'ci_lower': float(ci_lower),
             'ci_upper': float(ci_upper),
             **{k: v for k, v in relative_lift_fields(control_rate, treatment_rate).items()

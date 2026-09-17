@@ -66,6 +66,17 @@ def ship_decision(
             'harmed_guardrails': []
         }
     
+    bad_days = ((health or {}).get('over_time') or {}).get('days_with_srm') or []
+    if bad_days:
+        return {
+            'decision': INVALID,
+            'reasons': [
+                f"Sample ratio mismatch on {len(bad_days)} day(s) ({', '.join(d['day'] for d in bad_days[:3])}). "
+                "Assignment or logging broke on those days. Fix or exclude them before trusting the result."
+            ],
+            'harmed_guardrails': []
+        }
+    
     harmed = [name for name, r in guardrails.items() if _harmful(r, directions.get(name, True))]
     for name in harmed:
         r = guardrails[name]

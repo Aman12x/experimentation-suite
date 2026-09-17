@@ -18,7 +18,8 @@ An A/B testing and causal inference toolkit that answers the question a product 
 - **CUPED** variance reduction with a pre-experiment covariate
 - **Sequential testing** with always-valid p-values (mixture SPRT), so checking results daily does not inflate false positives
 - **Multiple variants** against one control with Holm, Bonferroni, or Benjamini-Hochberg correction
-- Mann-Whitney U and percentile bootstrap for skewed metrics such as revenue
+- **Ratio metrics** (revenue per session, clicks per view) by the delta method, targeting the ratio of totals rather than the mean of per-user ratios
+- Mann-Whitney U and a memory-bounded percentile bootstrap for skewed metrics such as revenue
 - Bayesian Beta-Binomial test with probability of being better, credible interval on lift, and expected loss per arm
 - Power analysis and sample-size calculator
 
@@ -33,6 +34,8 @@ An A/B testing and causal inference toolkit that answers the question a product 
 - Guardrail metrics, each with its own direction (higher or lower is better)
 - A single verdict with reasons: `SHIP`, `DO NOT SHIP`, `KEEP RUNNING`, `STOP - NO MEANINGFUL EFFECT`, or `INVALID - FIX THE EXPERIMENT`
 - Health checks that run before any result is shown: sample ratio mismatch (any number of arms, any expected split), outliers, missing data, variance ratio, normality
+- With an exposure timestamp: sample ratio mismatch **by day** (one broken day invalidates the result even if the overall split looks fine) and a whole-weeks check
+- Relative lift is reported only against a clearly positive baseline; otherwise results fall back to the absolute change instead of printing a meaningless percentage
 
 **Causal inference for observational data**
 - Propensity score matching (1:1 nearest neighbour within a caliper) with balance before and after
@@ -59,8 +62,9 @@ An A/B testing and causal inference toolkit that answers the question a product 
 | False-positive rate with 20 interim looks | ≤ 5% | 1.2% | peeking at fixed-horizon p: 25.4% |
 | 2SLS 95% CI coverage with an unobserved confounder | 95% | 95.0% | OLS within ±0.1 of truth: 0.0% |
 | False-positive rate when users are randomized but rows are sessions | 5% | 4.5% (one row per user) | sessions treated as independent: 45.2% |
+| False-positive rate for revenue per session (ratio metric) | 5% | 5.7% (delta method) | t-test on sessions: 8.3% |
 
-The same properties are enforced with tolerances in `tests/`, so a regression in any of them fails CI.
+The same properties are enforced with tolerances in `tests/`, so a regression in any of them fails CI. Property-based tests (`hypothesis`) also throw hundreds of generated inputs at the engine, the decision logic, and the unit aggregation: constants, two-point samples, negative and near-zero baselines, extreme scales.
 
 ---
 
@@ -154,6 +158,7 @@ pre_trends = lab.event_study(df, "region", ["year", "quarter"], "sales",
 | `POST /api/ab-test/t-test`, `/z-test`, `/proportions`, `/chi-squared` | Frequentist tests |
 | `POST /api/ab-test/mann-whitney`, `/bootstrap` | Distribution-free tests |
 | `POST /api/ab-test/cuped` | Variance reduction |
+| `POST /api/ab-test/ratio-metric` | Ratio of totals by the delta method |
 | `POST /api/ab-test/multi-variant` | Many variants, corrected p-values |
 | `POST /api/ab-test/sequential` | Always-valid monitoring |
 | `POST /api/ab-test/bayesian`, `/power-analysis` | Bayesian test, sample size |

@@ -277,6 +277,22 @@ class TestAdvancedAndCausalEndpoints:
         assert r.json()["variance_reduction_pct"] > 80
     
     @pytest.mark.integration
+    def test_ratio_metric_endpoint(self):
+        r = client.post("/api/ab-test/ratio-metric", json={
+            "control_numerator": [10, 40, 25, 5], "control_denominator": [1, 4, 2, 1],
+            "treatment_numerator": [12, 50, 30, 8], "treatment_denominator": [1, 4, 2, 1]})
+        assert r.status_code == 200
+        assert r.json()["control_mean"] == pytest.approx(80 / 8)
+        assert r.json()["treatment_mean"] == pytest.approx(100 / 8)
+    
+    @pytest.mark.integration
+    def test_constant_arms_return_valid_json(self):
+        """Zero variance with different means used to produce an infinite t statistic"""
+        r = client.post("/api/ab-test/t-test", json={"control": [0, 0, 0], "treatment": [1, 1, 1]})
+        assert r.status_code == 200
+        assert r.json()["p_value"] == 0.0 and r.json()["t_statistic"] is None
+    
+    @pytest.mark.integration
     def test_cuped_misaligned_covariate_is_400(self):
         r = client.post("/api/ab-test/cuped", json={
             "control": [1, 2, 3], "treatment": [1, 2, 3],

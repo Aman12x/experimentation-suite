@@ -1,0 +1,4 @@
+[server]
+# The app holds every session's data in memory on a 1 GiB instance.
+# 50 MB of CSV is a few hundred thousand rows, plenty for an experiment extract.
+maxUploadSize = 50

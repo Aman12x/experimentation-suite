@@ -27,6 +27,10 @@ What to look for:
 
 Same dataset. Untick **Compare all variants against control**, set **Treatment Arm** to `one_page_checkout`, **Statistical Test** to **CUPED (variance reduction)**, and **Pre-Experiment Covariate** to `pre_revenue`. The plain t-test on this arm is not significant; with CUPED it is.
 
+## A ratio metric: revenue per session
+
+Same dataset, **Primary Metric** `revenue`. Tick **This metric is a ratio of two columns** and choose `sessions` as the denominator. The control value shown is total revenue divided by total sessions, which is the number a dashboard would report, not the average of each user's own ratio.
+
 ## Difference-in-differences with a pre-trend test
 
 1. Pick the **Difference-in-differences (store sales)** sample.

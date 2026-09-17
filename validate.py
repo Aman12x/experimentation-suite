@@ -121,6 +121,26 @@ for _ in range(sims_unit):
 record("False-positive rate when users are randomized but rows are sessions", "5%",
        f"{unit_level / sims_unit:.1%} (one row per user)", f"sessions treated as independent: {row_level / sims_unit:.1%}")
 
+# 8. Ratio metrics: revenue per session, users randomized
+rng = np.random.default_rng(1)
+sims_ratio = 600
+delta_hits = session_hits = 0
+
+
+def ratio_arm(n):
+    sessions = rng.integers(1, 30, n)
+    per_session = [rng.exponential(5 * (1 + s / 30), s) for s in sessions]
+    return np.array([x.sum() for x in per_session]), sessions.astype(float), np.concatenate(per_session)
+
+
+for _ in range(sims_ratio):
+    rev_c, ses_c, rows_c = ratio_arm(400)
+    rev_t, ses_t, rows_t = ratio_arm(400)
+    delta_hits += engine.ratio_metric_test(rev_c, ses_c, rev_t, ses_t)['significant']
+    session_hits += engine.t_test(rows_c, rows_t)['significant']
+record("False-positive rate for revenue per session (ratio metric)", "5%",
+       f"{delta_hits / sims_ratio:.1%} (delta method)", f"t-test on sessions: {session_hits / sims_ratio:.1%}")
+
 table = pd.DataFrame(rows)
 print("| " + " | ".join(table.columns) + " |")
 print("|" + "|".join("---" for _ in table.columns) + "|")

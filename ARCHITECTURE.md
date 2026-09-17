@@ -46,6 +46,11 @@ Method-specific extras sit alongside (`variance_reduction_pct` for CUPED, `looks
 | Two-period DiD reports parallel trends as untestable | A gap in levels is allowed; only trends matter, and two periods carry no trend information |
 | Analysis runs at the unit of randomization | Rows from the same user are correlated; treating sessions as independent users makes standard errors too small |
 | The test defaults to Auto | The metric's type decides the test (rate → proportions, mean → Welch, heavy tail → bootstrap), so a user cannot silently pair a yes/no metric with the wrong test |
+| Ratio metrics use the delta method on per-unit totals | The business number is total numerator / total denominator; the mean of per-unit ratios down-weights heavy users and is a different estimand |
+| Relative lift can be `None` | Against a zero, negative, or noise-level baseline a percentage is meaningless or has the wrong sign; every consumer falls back to the absolute change |
+| The bootstrap resamples in chunks, scales its resample count, and refuses very large inputs | Memory stays flat on a 1 GiB instance; beyond a few hundred thousand units Welch gives the same answer |
+| A single day with a broken traffic split invalidates the decision | Overall counts can average out a day where assignment or logging failed |
+| Dependencies are locked | The image is rebuilt on every push; without a lock each deploy could pick up untested library releases |
 | Missing values raise | A NaN would otherwise propagate into a NaN statistic |
 
 ## Decision precedence
@@ -59,6 +64,7 @@ Method-specific extras sit alongside (`variance_reduction_pct` for CUPED, `looks
 | Reference checks | Output equals SciPy / statsmodels on the same input | `test_statistical_validity.py`, `test_advanced_methods.py` |
 | Simulations | Long-run guarantees hold: false-positive rate, interval coverage, family-wise error, peeking, CUPED bias and power, 2SLS coverage | same files, marked `slow` |
 | Known-effect recovery | PSM, DiD, event study, and IV recover a planted effect that a naive comparison misses | `test_causal_inference.py`, `test_decision_and_event_study.py` |
+| Properties | Generated inputs never produce NaN, infinities, invalid JSON, a wrong-direction recommendation, or a lost unit | `test_properties.py` |
 | Behaviour | Recommendations respect direction; guardrails block; reports escape input | `test_health_and_interpretation.py`, `test_reports.py` |
 | API | Every advertised route exists, validates input, and returns JSON-safe output | `test_api.py` |
 | End to end | The Streamlit app is driven headlessly through each flow on the sample data | `test_app.py` |

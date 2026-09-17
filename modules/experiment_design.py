@@ -4,11 +4,15 @@ Turn a raw table into an explicit experiment definition: who was randomized,
 what is being measured, and which test fits the metric
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .ab_advanced import is_binary_metric
+
+LARGE_SAMPLE = 100_000   # above this the mean is normal enough that Welch replaces the bootstrap
 
 ROW_IS_UNIT = "(each row is one unit)"
 
@@ -46,6 +50,36 @@ def guess_assignment_column(df: pd.DataFrame, exclude: Optional[str] = None) -> 
 def guess_control_label(labels: List[Any]) -> int:
     """Index of the label that looks like a control arm (0 if none does)"""
     return next((i for i, g in enumerate(labels) if str(g).strip().lower() in CONTROL_LABELS), 0)
+
+
+def guess_time_column(df: pd.DataFrame, exclude: Tuple = ()) -> Optional[str]:
+    """Best guess at the exposure timestamp: a datetime column, or text that parses as dates.
+    
+    Numeric columns are never guessed, however they are named: 'time_on_site_seconds'
+    is a duration, and reading it as a timestamp would put every unit in 1970.
+    """
+    columns = [c for c in df.columns if c not in exclude]
+    typed = [c for c in columns if pd.api.types.is_datetime64_any_dtype(df[c])]
+    if typed:
+        return typed[0]
+    
+    def parses_as_dates(column: str) -> bool:
+        if pd.api.types.is_numeric_dtype(df[column]) or pd.api.types.is_bool_dtype(df[column]):
+            return False
+        sample = df[column].dropna().astype(str).head(200)
+        if sample.empty:
+            return False
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            parsed = pd.to_datetime(sample, errors='coerce')
+        return bool(parsed.notna().mean() > 0.95)
+    
+    names = ('exposed', 'exposure', 'assigned', 'timestamp', 'created', 'datetime', 'date', 'time')
+    named_first = sorted(
+        columns,
+        key=lambda c: not (any(n in c.lower() for n in names) or c.lower().endswith(('_at', '_ts')))
+    )
+    return next((c for c in named_first if parses_as_dates(c)), None)
 
 
 def metric_candidates(df: pd.DataFrame, unit_col: Optional[str], assignment_col: Optional[str]) -> List[str]:
@@ -86,8 +120,9 @@ def describe_metric(values: pd.Series) -> Dict:
     zero_share = float((clean == 0).mean())
     is_count = bool((clean >= 0).all() and (clean == clean.round()).all())
     heavy_tail = abs(skew) > 2 or zero_share > 0.5
+    large = len(clean) > LARGE_SAMPLE
 
-    if heavy_tail:
+    if heavy_tail and not large:
         detail = []
         if zero_share > 0.5:
             detail.append(f"{zero_share:.0%} of units are zero")
@@ -109,7 +144,12 @@ def describe_metric(values: pd.Series) -> Dict:
         'recommended_test': 'T-Test',
         'summary': f"a {'count' if is_count else 'continuous'} value per unit, so the quantity compared is the **mean** "
                    f"({clean.mean():,.2f} overall)",
-        'reason': "Welch's t-test compares means and stays valid when the arms differ in size or variance.",
+        'reason': (
+            f"The metric is heavy-tailed, but with {len(clean):,} units the mean is normally distributed "
+            "to a very good approximation, so Welch's t-test is accurate and far faster than the bootstrap."
+            if heavy_tail else
+            "Welch's t-test compares means and stays valid when the arms differ in size or variance."
+        ),
         'skew': skew,
         'zero_share': zero_share
     }
@@ -120,7 +160,7 @@ def to_unit_level(
     unit_col: Optional[str],
     assignment_col: str,
     value_cols: List[str],
-    agg: str = 'mean',
+    agg: Union[str, Dict[str, str]] = 'mean',
     order_col: Optional[str] = None
 ) -> Tuple[pd.DataFrame, Dict]:
     """
@@ -139,7 +179,9 @@ def to_unit_level(
         unit_col: Randomization unit id column, or None if each row already is one unit
         assignment_col: Arm assignment column
         value_cols: Metric, guardrail, and covariate columns to carry along
-        agg: How to combine a unit's rows: 'mean', 'sum', or 'max'
+        agg: How to combine a unit's rows: 'mean', 'sum', or 'max'. A dict sets it per
+            column (ratio metrics need 'sum' for numerator and denominator); columns
+            not named use 'mean'.
         order_col: Optional timestamp (or sequence) column. Units come back ordered by
             their first appearance, which sequential tests rely on. Without it, the
             existing row order is taken as arrival order.
@@ -147,7 +189,9 @@ def to_unit_level(
     Returns:
         (unit-level frame, diagnostics)
     """
-    if agg not in ('mean', 'sum', 'max'):
+    per_column = agg if isinstance(agg, dict) else {}
+    default_agg = 'mean' if isinstance(agg, dict) else agg
+    if any(a not in ('mean', 'sum', 'max') for a in [default_agg, *per_column.values()]):
         raise ValueError("agg must be 'mean', 'sum', or 'max'")
 
     value_cols = list(dict.fromkeys(value_cols))
@@ -156,7 +200,7 @@ def to_unit_level(
         data = data.sort_values(order_col, kind='stable')
 
     if unit_col is None:
-        return data[[assignment_col] + value_cols].copy(), {
+        return data[[assignment_col] + value_cols + ([order_col] if order_col else [])].copy(), {
             'n_rows': int(len(data)), 'n_units': int(len(data)),
             'aggregated': False, 'max_rows_per_unit': 1, 'n_contaminated_units': 0
         }
@@ -172,11 +216,12 @@ def to_unit_level(
     if needs_aggregation:
         unit_df = (
             data.groupby(unit_col, sort=False)   # keep units in order of first appearance
-            .agg({assignment_col: 'first', **{c: agg for c in value_cols}})
+            .agg({assignment_col: 'first', **{c: per_column.get(c, default_agg) for c in value_cols},
+                  **({order_col: 'min'} if order_col else {})})   # first exposure
             .reset_index()
         )
     else:
-        unit_df = data[[unit_col, assignment_col] + value_cols].copy()
+        unit_df = data[[unit_col, assignment_col] + value_cols + ([order_col] if order_col else [])].copy()
 
     return unit_df, {
         'n_rows': int(len(df)),
@@ -207,7 +252,7 @@ def experiment_summary(
         "planned split " + " / ".join(f"{expected_split[a]:.0%}" for a in arms)
         if expected_split else "planned as an equal split"
     )
-    quantity = "rate" if metric_kind == 'binary' else "mean"
+    quantity = {'binary': "rate", 'ratio': "ratio of totals"}.get(metric_kind, "mean")
     direction = "rises" if higher_is_better else "falls"
 
     text = (

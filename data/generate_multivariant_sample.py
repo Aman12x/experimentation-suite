@@ -3,7 +3,8 @@ Generates data/multivariant_checkout_test.csv
 
 Synthetic three-arm checkout experiment built to exercise the features the
 other samples cannot: more than two variants, a pre-experiment covariate for
-CUPED, and a guardrail metric that one variant damages.
+CUPED, a guardrail metric that one variant damages, a session count for a
+ratio metric, and an exposure timestamp for the by-day checks.
 
     python data/generate_multivariant_sample.py
 """
@@ -30,6 +31,11 @@ converted = (rng.random(n) < convert_rate).astype(int)
 latency_shift = pd.Series(variant).map({'control': 0, 'one_page_checkout': 0, 'express_pay': 90}).to_numpy()
 page_load_ms = rng.normal(820, 150, n).clip(min=200) + latency_shift
 
+# Drawn after everything above so the earlier columns keep their exact values.
+# Two full weeks of exposure, and a session count so revenue per session can be a ratio metric.
+exposed_at = pd.Timestamp('2026-03-02') + pd.to_timedelta(rng.integers(0, 14 * 24 * 60, n), unit='m')
+sessions = 1 + rng.poisson(1 + pre_revenue / 40.0)
+
 df = pd.DataFrame({
     'user_id': np.arange(1, n + 1),
     'variant': variant,
@@ -37,6 +43,8 @@ df = pd.DataFrame({
     'revenue': revenue.round(2),
     'converted': converted,
     'page_load_ms': page_load_ms.round(0).astype(int),
+    'sessions': sessions,
+    'exposed_at': exposed_at.strftime('%Y-%m-%d %H:%M'),
 })
 out = Path(__file__).parent / 'multivariant_checkout_test.csv'
 df.to_csv(out, index=False)

@@ -11,6 +11,9 @@ from datetime import datetime
 import io
 
 
+RAW_DATA_ROW_LIMIT = 100_000
+
+
 def _scalar_items(results: Dict):
     """Result entries that fit in a two-column table"""
     for key, value in results.items():
@@ -99,8 +102,13 @@ class ReportGenerator:
                 if isinstance(value, pd.DataFrame):
                     value.to_excel(writer, sheet_name=key[:31], index=False)
             
-            # Data sheet
-            data.to_excel(writer, sheet_name='Raw Data', index=False)
+            # Data sheet, capped: a sheet holds 1,048,576 rows at most and large workbooks exhaust memory
+            if len(data) > RAW_DATA_ROW_LIMIT:
+                pd.DataFrame({'Note': [
+                    f"Raw data omitted: {len(data):,} rows exceeds the {RAW_DATA_ROW_LIMIT:,}-row export limit."
+                ]}).to_excel(writer, sheet_name='Raw Data', index=False)
+            else:
+                data.to_excel(writer, sheet_name='Raw Data', index=False)
             
             # Format workbook
             workbook = writer.book

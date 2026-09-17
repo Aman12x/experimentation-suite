@@ -21,7 +21,8 @@ class HealthChecker:
         df: pd.DataFrame,
         group_col: str,
         metric_col: str,
-        expected_ratio: Optional[Union[Dict, Sequence[float]]] = None
+        expected_ratio: Optional[Union[Dict, Sequence[float]]] = None,
+        time_col: Optional[str] = None
     ) -> Dict:
         """
         Run all health checks on the experiment data
@@ -32,6 +33,7 @@ class HealthChecker:
             metric_col: Metric column
             expected_ratio: Expected traffic split, as {group label: share} or a
                 sequence in sorted group-label order. Defaults to an equal split.
+            time_col: Optional exposure timestamp; enables the by-day checks
             
         Returns:
             Dictionary with all check results
@@ -45,9 +47,11 @@ class HealthChecker:
         missing_result = self.check_missing_data(df, group_col, metric_col)
         variance_result = self.check_variance_ratio(df, group_col, metric_col)
         normality_result = self.check_normality(df, group_col, metric_col)
+        time_result = self.check_over_time(df, group_col, time_col, expected_ratio) if time_col else None
         
         # A check that could not run is not a check that passed
-        for name, result in [('Sample ratio', srm_result), ('Variance ratio', variance_result)]:
+        for name, result in [('Sample ratio', srm_result), ('Variance ratio', variance_result),
+                             ('Over-time', time_result or {})]:
             if 'error' in result:
                 self.warnings.append(f"⚠️ {name} check could not run: {result['error']}")
         
@@ -57,6 +61,7 @@ class HealthChecker:
             'missing_data': missing_result,
             'variance_ratio': variance_result,
             'normality': normality_result,
+            'over_time': time_result,
             'warnings': self.warnings,
             'checks_passed': self.checks_passed,
             'overall_health': len(self.warnings) == 0
@@ -140,6 +145,84 @@ class HealthChecker:
             'expected_proportions': ratio.tolist(),
             'actual_proportions': actual_proportions.tolist(),
             'severity': 'CRITICAL' if has_srm else 'OK'
+        }
+    
+    def check_over_time(
+        self,
+        df: pd.DataFrame,
+        group_col: str,
+        time_col: str,
+        expected_ratio: Optional[Union[Dict, Sequence[float]]] = None,
+        alpha: float = 0.001
+    ) -> Dict:
+        """
+        Time-based checks: experiment duration and sample ratio mismatch by day
+        
+        An overall split can look fine while single days are badly off (an
+        outage in one arm, a deploy that broke assignment for an afternoon).
+        Each day is tested against the planned split with a Bonferroni-corrected
+        threshold. Duration matters because behaviour differs by weekday: a test
+        that does not cover whole weeks over-represents some days.
+        
+        Args:
+            df: One row per unit
+            group_col: Column with group assignments
+            time_col: Exposure timestamp column
+            expected_ratio: Planned split, as in check_sample_ratio_mismatch
+            alpha: Family-wise significance level across days
+        """
+        times = pd.to_datetime(df[time_col], errors='coerce')
+        data = df.assign(_day=times.dt.date).dropna(subset=['_day', group_col])
+        if data.empty:
+            return {'error': f"'{time_col}' has no readable timestamps"}
+        
+        days = sorted(data['_day'].unique())
+        n_days = (days[-1] - days[0]).days + 1
+        
+        bad_days = []
+        for day, day_df in data.groupby('_day'):
+            if day_df[group_col].nunique() < 2 or len(day_df) < 50:
+                continue
+            quiet = HealthChecker()   # per-day runs must not add their own messages
+            result = quiet.check_sample_ratio_mismatch(day_df, group_col, expected_ratio, alpha=alpha / len(days))
+            if result.get('has_srm'):
+                bad_days.append({
+                    'day': str(day), 'p_value': result['p_value'], 'n': int(len(day_df)),
+                    'actual_proportions': dict(zip(result['groups'], result['actual_proportions']))
+                })
+        
+        if bad_days:
+            listed = ", ".join(d['day'] for d in bad_days[:5])
+            self.warnings.append(
+                f"⚠️ SAMPLE RATIO MISMATCH ON {len(bad_days)} OF {len(days)} DAYS ({listed}). "
+                "Assignment or logging broke on those days even if the overall split looks fine. "
+                "Investigate, and consider excluding them."
+            )
+        else:
+            self.checks_passed.append(f"✓ Traffic split is stable across all {len(days)} days")
+        
+        whole_weeks = n_days >= 7 and n_days % 7 == 0
+        if n_days < 7:
+            self.warnings.append(
+                f"⚠️ Experiment covers only {n_days} day(s). Behaviour differs by weekday, "
+                "so run at least one full week before deciding."
+            )
+        elif not whole_weeks:
+            self.warnings.append(
+                f"⚠️ Experiment covers {n_days} days, not a whole number of weeks, so some "
+                "weekdays count more than others."
+            )
+        else:
+            self.checks_passed.append(f"✓ Experiment covers {n_days // 7} full week(s)")
+        
+        return {
+            'n_days': int(n_days),
+            'n_days_with_data': len(days),
+            'first_day': str(days[0]),
+            'last_day': str(days[-1]),
+            'covers_whole_weeks': bool(whole_weeks),
+            'days_with_srm': bad_days,
+            'severity': 'CRITICAL' if bad_days else ('WARNING' if not whole_weeks else 'OK')
         }
     
     def check_outliers(
