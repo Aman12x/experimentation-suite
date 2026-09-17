@@ -42,3 +42,46 @@ jobs:
         pip install flake8
         flake8 modules/ utils/ --max-line-length=100 --count --statistics
       continue-on-error: true
+
+  docker:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Build image
+      run: docker build -t experimentation-suite .
+    
+    - name: Default container becomes healthy (Dockerfile HEALTHCHECK)
+      run: |
+        docker run -d --name ui -p 8501:8501 experimentation-suite
+        for i in $(seq 1 40); do
+          status=$(docker inspect --format '{{.State.Health.Status}}' ui)
+          echo "attempt $i: $status"
+          [ "$status" = "healthy" ] && break
+          sleep 3
+        done
+        docker logs ui
+        [ "$status" = "healthy" ]
+        docker rm -f ui
+    
+    - name: Compose stack becomes healthy
+      run: docker compose up -d --build --wait --wait-timeout 180
+    
+    - name: Exercise both services over HTTP
+      run: |
+        curl -fsS http://localhost:8501/_stcore/health
+        curl -fsS http://localhost:8000/health
+        curl -fsS -X POST http://localhost:8000/api/ab-test/proportions \
+          -H "Content-Type: application/json" \
+          -d '{"control_success": 50, "control_total": 1000, "treatment_success": 65, "treatment_total": 1000}'
+        docker compose exec -T api python demo.py
+    
+    - name: Logs on failure
+      if: failure()
+      run: docker compose logs
+    
+    - name: Tear down
+      if: always()
+      run: docker compose down
