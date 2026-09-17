@@ -275,6 +275,101 @@ class CausalInferenceLab:
             'significant': bool(p_value < 0.05)
         }
 
+    def event_study(
+        self,
+        df: pd.DataFrame,
+        group_col: str,
+        period_cols: List[str],
+        outcome_col: str,
+        treatment_group: Any,
+        first_treated_period: Any,
+        cluster_col: Optional[str] = None
+    ) -> Dict:
+        """
+        Event-study DiD with a pre-trend test (needs several pre-treatment periods)
+        
+        Estimates a separate treated-vs-control gap for every period, relative
+        to the last pre-treatment period. If trends were parallel before the
+        intervention, the pre-period gaps are jointly zero; the Wald test on
+        them is the usual check of the parallel-trends assumption.
+        
+        Args:
+            df: Panel data
+            group_col: Column identifying treated vs control groups
+            period_cols: One or more columns that together order time (e.g. ['year', 'quarter'])
+            outcome_col: Outcome variable
+            treatment_group: Value identifying the treatment group
+            first_treated_period: First treated period, as a value (one period
+                column) or a tuple of values (several period columns)
+            cluster_col: Optional unit column for cluster-robust standard errors
+        """
+        period_cols = [period_cols] if isinstance(period_cols, str) else list(period_cols)
+        cols = [group_col, outcome_col] + period_cols + ([cluster_col] if cluster_col else [])
+        data = df[cols].dropna().copy()
+        
+        # Collapse the period columns into one ordered index
+        keys = data[period_cols].apply(tuple, axis=1)
+        ordered = sorted(keys.unique())
+        first = first_treated_period if isinstance(first_treated_period, tuple) else (first_treated_period,)
+        if first not in ordered:
+            raise ValueError(f"First treated period {first_treated_period} not found in the data")
+        
+        start = ordered.index(first)
+        if start < 2:
+            raise ValueError("A pre-trend test needs at least two pre-treatment periods")
+        
+        data['_t'] = keys.map({k: i for i, k in enumerate(ordered)}) - start  # 0 = first treated period
+        data['treated'] = (data[group_col] == treatment_group).astype(int)
+        data['_outcome'] = data[outcome_col].astype(float)
+        if data['treated'].nunique() < 2:
+            raise ValueError("Need both treated and control observations")
+        
+        # Period dummies and treated-by-period interactions, reference = last pre period (-1)
+        design = pd.DataFrame({'const': 1.0, 'treated': data['treated'].astype(float)}, index=data.index)
+        event_times = [t for t in sorted(data['_t'].unique()) if t != -1]
+        for t in event_times:
+            design[f'period_{t}'] = (data['_t'] == t).astype(float)
+            design[f'gap_{t}'] = design[f'period_{t}'] * design['treated']
+        
+        model = sm.OLS(data['_outcome'], design)
+        if cluster_col:
+            fit = model.fit(cov_type='cluster', cov_kwds={'groups': pd.factorize(data[cluster_col])[0]})
+        else:
+            fit = model.fit(cov_type='HC1')
+        
+        conf = fit.conf_int()
+        labels = {i - start: ' / '.join(map(str, k)) for i, k in enumerate(ordered)}
+        coefficients = pd.DataFrame([{
+            'event_time': int(t),
+            'period': labels[t],
+            'estimate': float(fit.params[f'gap_{t}']),
+            'ci_lower': float(conf.loc[f'gap_{t}', 0]),
+            'ci_upper': float(conf.loc[f'gap_{t}', 1]),
+            'p_value': float(fit.pvalues[f'gap_{t}'])
+        } for t in event_times])
+        
+        pre_terms = [f'gap_{t}' for t in event_times if t < -1]
+        restriction = np.zeros((len(pre_terms), len(fit.params)))
+        for row, term in enumerate(pre_terms):
+            restriction[row, list(fit.params.index).index(term)] = 1.0
+        pre_test = fit.wald_test(restriction, use_f=False, scalar=True)
+        pre_p = float(pre_test.pvalue)
+        
+        post = coefficients[coefficients.event_time >= 0]
+        return {
+            'method': 'Event Study',
+            'coefficients': coefficients,
+            'pre_trend_p_value': pre_p,
+            'pre_trend_statistic': float(pre_test.statistic),
+            'n_pre_periods_tested': len(pre_terms),
+            # Failing to reject is supporting evidence, not proof
+            'parallel_trends_assumption': bool(pre_p >= 0.05),
+            'parallel_trends_testable': True,
+            'average_post_effect': float(post['estimate'].mean()),
+            'reference_period': labels[-1],
+            'n_observations': int(len(data))
+        }
+    
     def instrumental_variables(
         self,
         df: pd.DataFrame,

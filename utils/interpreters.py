@@ -113,12 +113,13 @@ class StatisticalInterpreter:
         )
     
     @staticmethod
-    def interpret_ab_test_results(results: Dict) -> str:
+    def interpret_ab_test_results(results: Dict, higher_is_better: bool = True) -> str:
         """
         Provide comprehensive business interpretation of A/B test
         
         Args:
             results: Dictionary with test results
+            higher_is_better: False for metrics like latency or churn, where a drop is the win
             
         Returns:
             Plain English business interpretation
@@ -131,6 +132,8 @@ class StatisticalInterpreter:
         control_mean = results.get('control_mean', 0)
         treatment_mean = results.get('treatment_mean', 0)
         relative_lift = results.get('relative_lift', 0)
+        # Signed so that positive always means "moved in the good direction"
+        benefit = relative_lift if higher_is_better else -relative_lift
         
         # Build interpretation
         interpretation = f"## 🎯 Business Interpretation ({test_type})\n\n"
@@ -150,15 +153,15 @@ class StatisticalInterpreter:
                     f"({abs(relative_lift):.2f}%). Consider whether this improvement justifies "
                     f"the implementation cost.\n\n"
                 )
-            elif relative_lift > 20:
+            elif benefit > 20:
                 interpretation += (
                     f"🚀 **Strong Impact:** This is a substantial effect ({abs(relative_lift):.2f}%). "
                     f"Strong candidate for implementation.\n\n"
                 )
-            elif relative_lift < -20:
+            elif benefit < -20:
                 interpretation += (
-                    f"🛑 **Strong Negative Impact:** The treatment lowered the metric by "
-                    f"{abs(relative_lift):.2f}%.\n\n"
+                    f"🛑 **Strong Negative Impact:** The treatment moved the metric "
+                    f"{abs(relative_lift):.2f}% in the wrong direction.\n\n"
                 )
         else:
             interpretation += (
@@ -172,7 +175,10 @@ class StatisticalInterpreter:
         interpretation += f"### 📊 Statistical Details\n\n"
         interpretation += f"- **Control Mean:** {control_mean:.4f}\n"
         interpretation += f"- **Treatment Mean:** {treatment_mean:.4f}\n"
-        interpretation += f"- **Relative Change:** {relative_lift:+.2f}%\n"
+        interpretation += f"- **Relative Change:** {relative_lift:+.2f}%"
+        if 'lift_ci_lower' in results:
+            interpretation += f" (95% CI {results['lift_ci_lower']:+.2f}% to {results['lift_ci_upper']:+.2f}%)"
+        interpretation += "\n"
         interpretation += f"- **P-value:** {p_value:.4f}\n"
         interpretation += f"- **Sample Sizes:** Control={results.get('control_n', 'N/A')}, Treatment={results.get('treatment_n', 'N/A')}\n\n"
         
@@ -190,14 +196,42 @@ class StatisticalInterpreter:
                 results['cohens_d']
             ) + "\n\n"
         
+        # Method-specific notes
+        if 'variance_reduction_pct' in results:
+            interpretation += (
+                f"### 🎯 CUPED Variance Reduction\n\n"
+                f"The pre-experiment covariate (correlation {results['covariate_correlation']:.2f}) removed "
+                f"**{results['variance_reduction_pct']:.1f}%** of the variance. Without it the p-value "
+                f"would have been {results['unadjusted_p_value']:.4f}; with it, {p_value:.4f}. "
+                f"Same data, tighter answer.\n\n"
+            )
+        if 'looks' in results:
+            stop = results.get('could_stop_at_look')
+            interpretation += (
+                f"### ⏱️ Sequential Monitoring\n\n"
+                f"Checked at {len(results['looks'])} interim looks with an always-valid p-value, "
+                f"so stopping early does not inflate false positives. "
+            )
+            interpretation += (
+                f"The test could have stopped at look {stop} "
+                f"({results['could_stop_at_n']:,} of {results['control_n'] + results['treatment_n']:,} users).\n\n"
+                if stop else "No look crossed the threshold.\n\n"
+            )
+        if 'prob_superiority' in results:
+            interpretation += (
+                f"### 🎲 Probability of Superiority\n\n"
+                f"A random treatment user beats a random control user "
+                f"{results['prob_superiority']*100:.1f}% of the time (50% = no difference). "
+                f"Mann-Whitney compares whole distributions, not means.\n\n"
+            )
+        
         # Recommendation
         interpretation += "### 💡 Recommendation\n\n"
-        if significant and relative_lift < 0:
+        if significant and benefit < 0:
             interpretation += (
-                "**❌ DO NOT IMPLEMENT:** The treatment performed significantly worse than control. "
-                "If a lower value of this metric is the goal (e.g. churn or load time), read this as a win instead."
+                "**❌ DO NOT IMPLEMENT:** The treatment performed significantly worse than control."
             )
-        elif significant and relative_lift > 2:
+        elif significant and benefit > 2:
             interpretation += (
                 "**✅ RECOMMEND:** Implement the treatment. The results show a statistically "
                 "significant and practically meaningful improvement."
@@ -214,6 +248,28 @@ class StatisticalInterpreter:
             )
         
         return interpretation
+    
+    @staticmethod
+    def interpret_multi_variant(results: Dict) -> str:
+        """Explain a multi-variant comparison and why the p-values were adjusted"""
+        k = results['n_comparisons']
+        alpha = results['alpha']
+        raw_wins = [c['group'] for c in results['comparisons'] if c['significant_raw']]
+        wins = [c['group'] for c in results['comparisons'] if c['significant']]
+        
+        text = (
+            f"**{k} variants tested against {results['control']}.** Testing {k} variants at "
+            f"α={alpha} each would give a {(1 - (1 - alpha)**k)*100:.0f}% chance of at least one "
+            f"false win, so p-values are adjusted with **{results['correction']}**.\n\n"
+        )
+        lost = [g for g in raw_wins if g not in wins]
+        if lost:
+            text += f"⚠️ {', '.join(lost)} looked significant before correction but did not survive it.\n\n"
+        if results['best_variant']:
+            text += f"🏆 **Best variant: {results['best_variant']}**\n\n"
+        elif not wins:
+            text += "No variant beat control after correction.\n\n"
+        return text
     
     @staticmethod
     def interpret_power_analysis(power_results: Dict) -> str:
