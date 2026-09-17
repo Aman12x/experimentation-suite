@@ -6,7 +6,7 @@
 
 An A/B testing and causal inference toolkit that answers the question a product team actually asks: **ship it, don't ship it, or keep running?** One statistics engine sits behind a Streamlit app, a REST API, and a command-line demo, and every method is checked by simulation against the guarantee it claims.
 
-**Live app:** https://experiment-suite.streamlit.app
+**Live app:** https://experimentation-suite-526867948326.us-east4.run.app
 
 ---
 
