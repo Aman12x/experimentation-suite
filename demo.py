@@ -4,6 +4,8 @@ Standalone Demo of the Experimentation & Causal Analysis Suite
 Runs core statistical functions without requiring Streamlit
 """
 
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 from scipy import stats
@@ -16,7 +18,8 @@ print()
 
 # Load sample data
 print("📁 Loading sample A/B test data...")
-df = pd.read_csv('sample_ab_test_data.csv')
+DATA_DIR = Path(__file__).parent / 'data'
+df = pd.read_csv(DATA_DIR / 'sample_ab_test_data.csv')
 print(f"✅ Loaded {len(df):,} rows")
 print()
 
@@ -266,7 +269,7 @@ print("📊 DIFFERENCE-IN-DIFFERENCES DEMO")
 print("=" * 70)
 print()
 
-did_df = pd.read_csv('sample_did_data.csv')
+did_df = pd.read_csv(DATA_DIR / 'sample_did_data.csv')
 print(f"📁 Loaded DiD data: {len(did_df):,} rows")
 print()
 

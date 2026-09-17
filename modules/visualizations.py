@@ -373,7 +373,7 @@ class Visualizer:
             )
         
         fig.update_layout(
-            title="Difference-in-Differences: Parallel Trends",
+            title="Difference-in-Differences: Group Means Before and After",
             xaxis_title="Time Period",
             yaxis_title="Mean Outcome",
             template='plotly_white',

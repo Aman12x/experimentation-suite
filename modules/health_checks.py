@@ -6,7 +6,7 @@ Automated data quality checks and Sample Ratio Mismatch (SRM) detection
 import pandas as pd
 import numpy as np
 from scipy import stats
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Sequence, Union
 
 
 class HealthChecker:
@@ -21,7 +21,7 @@ class HealthChecker:
         df: pd.DataFrame,
         group_col: str,
         metric_col: str,
-        expected_ratio: Tuple[float, float] = (0.5, 0.5)
+        expected_ratio: Optional[Union[Dict, Sequence[float]]] = None
     ) -> Dict:
         """
         Run all health checks on the experiment data
@@ -30,7 +30,8 @@ class HealthChecker:
             df: DataFrame with experiment data
             group_col: Group assignment column
             metric_col: Metric column
-            expected_ratio: Expected (control, treatment) ratio
+            expected_ratio: Expected traffic split, as {group label: share} or a
+                sequence in sorted group-label order. Defaults to an equal split.
             
         Returns:
             Dictionary with all check results
@@ -44,6 +45,11 @@ class HealthChecker:
         missing_result = self.check_missing_data(df, group_col, metric_col)
         variance_result = self.check_variance_ratio(df, group_col, metric_col)
         normality_result = self.check_normality(df, group_col, metric_col)
+        
+        # A check that could not run is not a check that passed
+        for name, result in [('Sample ratio', srm_result), ('Variance ratio', variance_result)]:
+            if 'error' in result:
+                self.warnings.append(f"⚠️ {name} check could not run: {result['error']}")
         
         return {
             'sample_ratio_mismatch': srm_result,
@@ -60,7 +66,7 @@ class HealthChecker:
         self,
         df: pd.DataFrame,
         group_col: str,
-        expected_ratio: Tuple[float, float] = (0.5, 0.5),
+        expected_ratio: Optional[Union[Dict, Sequence[float]]] = None,
         alpha: float = 0.001  # More stringent for SRM
     ) -> Dict:
         """
@@ -72,7 +78,8 @@ class HealthChecker:
         Args:
             df: DataFrame
             group_col: Column with group assignments
-            expected_ratio: Expected (control, treatment) proportions
+            expected_ratio: Expected split, as {group label: share} or a sequence
+                in sorted group-label order. Defaults to an equal split.
             alpha: Significance level (typically 0.001 for SRM)
             
         Returns:
@@ -81,31 +88,43 @@ class HealthChecker:
         # Get group counts
         groups = df[group_col].value_counts().sort_index()
         
-        if len(groups) != 2:
-            return {'error': 'SRM check requires exactly 2 groups'}
+        if len(groups) < 2:
+            return {'error': 'SRM check requires at least 2 groups'}
+        
+        if expected_ratio is None:
+            ratio = np.full(len(groups), 1 / len(groups))
+        elif isinstance(expected_ratio, dict):
+            missing = [g for g in groups.index if g not in expected_ratio]
+            if missing:
+                return {'error': f'No expected share given for groups: {missing}'}
+            ratio = np.array([expected_ratio[g] for g in groups.index], dtype=float)
+        else:
+            ratio = np.array(expected_ratio, dtype=float)
+            if len(ratio) != len(groups):
+                return {'error': f'Expected {len(groups)} shares, got {len(ratio)}'}
+        
+        if (ratio <= 0).any():
+            return {'error': 'Expected shares must be positive'}
+        ratio = ratio / ratio.sum()
         
         observed = groups.values
         total = observed.sum()
+        expected = ratio * total
         
-        # Expected counts based on ratio
-        expected = np.array([
-            expected_ratio[0] * total,
-            expected_ratio[1] * total
-        ])
-        
-        # Chi-squared test
-        chi2_stat = np.sum((observed - expected)**2 / expected)
-        p_value = 1 - stats.chi2.cdf(chi2_stat, df=1)
+        # Chi-squared goodness-of-fit test
+        chi2_stat, p_value = stats.chisquare(observed, expected)
         
         # Actual proportions
         actual_proportions = observed / total
         
-        has_srm = p_value < alpha
+        has_srm = bool(p_value < alpha)
         
         if has_srm:
+            expected_txt = ", ".join(f"{g}={r:.3f}" for g, r in zip(groups.index, ratio))
+            actual_txt = ", ".join(f"{g}={r:.3f}" for g, r in zip(groups.index, actual_proportions))
             self.warnings.append(
                 f"⚠️ SAMPLE RATIO MISMATCH DETECTED (p={p_value:.6f}). "
-                f"Expected {expected_ratio}, got ({actual_proportions[0]:.3f}, {actual_proportions[1]:.3f}). "
+                f"Expected ({expected_txt}), got ({actual_txt}). "
                 "This suggests data quality issues - investigate before interpreting results!"
             )
         else:
@@ -113,11 +132,12 @@ class HealthChecker:
         
         return {
             'has_srm': has_srm,
-            'chi2_statistic': chi2_stat,
-            'p_value': p_value,
-            'expected_counts': expected,
-            'observed_counts': observed,
-            'expected_proportions': expected_ratio,
+            'chi2_statistic': float(chi2_stat),
+            'p_value': float(p_value),
+            'groups': [str(g) for g in groups.index],
+            'expected_counts': expected.tolist(),
+            'observed_counts': observed.tolist(),
+            'expected_proportions': ratio.tolist(),
             'actual_proportions': actual_proportions.tolist(),
             'severity': 'CRITICAL' if has_srm else 'OK'
         }
@@ -243,24 +263,26 @@ class HealthChecker:
         Returns:
             Dictionary with variance check results
         """
-        groups = df.groupby(group_col)[metric_col].apply(list)
+        groups = df.dropna(subset=[metric_col]).groupby(group_col)[metric_col].apply(list)
         
-        if len(groups) != 2:
-            return {'error': 'Variance check requires exactly 2 groups'}
+        if len(groups) < 2:
+            return {'error': 'Variance check requires at least 2 groups'}
         
         group_data = [np.array(g) for g in groups.values]
+        if min(len(g) for g in group_data) < 2:
+            return {'error': 'Variance check requires at least 2 observations per group'}
         
         # Levene's test for equal variances
         statistic, p_value = stats.levene(*group_data)
         
         # Variance ratio
         variances = [np.var(g, ddof=1) for g in group_data]
-        variance_ratio = max(variances) / min(variances)
+        variance_ratio = max(variances) / min(variances) if min(variances) > 0 else float('inf')
         
         if variance_ratio > threshold:
             self.warnings.append(
                 f"⚠️ Large variance ratio ({variance_ratio:.2f}). "
-                "Consider using Welch's t-test or transformation."
+                "Use Welch's t-test (the default here) rather than the pooled Student's test."
             )
         else:
             self.checks_passed.append(
@@ -268,11 +290,11 @@ class HealthChecker:
             )
         
         return {
-            'variance_ratio': variance_ratio,
-            'levene_statistic': statistic,
-            'levene_p_value': p_value,
-            'equal_variances': p_value > 0.05,
-            'group_variances': {str(k): v for k, v in zip(groups.index, variances)},
+            'variance_ratio': float(variance_ratio),
+            'levene_statistic': float(statistic),
+            'levene_p_value': float(p_value),
+            'equal_variances': bool(p_value > 0.05),
+            'group_variances': {str(k): float(v) for k, v in zip(groups.index, variances)},
             'severity': 'WARNING' if variance_ratio > threshold else 'OK'
         }
     

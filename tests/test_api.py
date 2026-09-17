@@ -180,6 +180,38 @@ class TestAPIEndpoints:
         assert response.status_code == 422  # Validation error
 
 
+    @pytest.mark.integration
+    def test_identical_arrays_return_valid_json(self):
+        """Zero variance used to produce NaN, which is not valid JSON"""
+        payload = {"control": [5, 5, 5, 5], "treatment": [5, 5, 5, 5]}
+        
+        response = client.post("/api/ab-test/t-test", json=payload)
+        assert response.status_code == 200
+        assert response.json()["p_value"] == 1.0
+    
+    @pytest.mark.integration
+    def test_unknown_alternative_is_a_validation_error(self):
+        payload = {"control": [1, 2, 3, 4], "treatment": [2, 3, 4, 5], "alternative": "bogus"}
+        
+        response = client.post("/api/ab-test/t-test", json=payload)
+        assert response.status_code == 422
+    
+    @pytest.mark.integration
+    def test_api_and_app_share_one_engine(self):
+        from api_server import get_ab_engine
+        from modules.ab_testing import ABTestingEngine
+        
+        assert isinstance(get_ab_engine(), ABTestingEngine)
+    
+    @pytest.mark.integration
+    def test_t_test_defaults_to_welch(self):
+        payload = {"control": [98, 102, 95, 105, 99], "treatment": [110, 115, 108, 112, 109]}
+        
+        assert client.post("/api/ab-test/t-test", json=payload).json()["variant"] == "welch"
+        payload["equal_var"] = True
+        assert client.post("/api/ab-test/t-test", json=payload).json()["variant"] == "student"
+
+
 class TestAPIDocumentation:
     """Test API documentation endpoints"""
     

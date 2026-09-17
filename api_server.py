@@ -7,13 +7,13 @@ from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 import numpy as np
 import pandas as pd
 from io import BytesIO
 import logging
 
-# Import our modules (without streamlit dependency)
+# Make the local packages importable when run as a script
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -44,13 +44,16 @@ app.add_middleware(
 
 class TTestRequest(BaseModel):
     """Request model for T-test"""
-    control: List[float] = Field(..., description="Control group data", min_items=2)
-    treatment: List[float] = Field(..., description="Treatment group data", min_items=2)
+    control: List[float] = Field(..., description="Control group data", min_length=2)
+    treatment: List[float] = Field(..., description="Treatment group data", min_length=2)
     alpha: float = Field(0.05, ge=0.01, le=0.10, description="Significance level")
-    alternative: str = Field("two-sided", description="Alternative hypothesis: two-sided, greater, or less")
+    alternative: Literal["two-sided", "greater", "less"] = Field(
+        "two-sided", description="Alternative hypothesis"
+    )
+    equal_var: bool = Field(False, description="True = Student's pooled t-test, False = Welch's t-test")
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "control": [98, 102, 95, 105, 99, 101],
                 "treatment": [110, 115, 108, 112, 109, 111],
@@ -62,10 +65,10 @@ class TTestRequest(BaseModel):
 
 class ZTestRequest(BaseModel):
     """Request model for Z-test"""
-    control: List[float] = Field(..., min_items=30)
-    treatment: List[float] = Field(..., min_items=30)
+    control: List[float] = Field(..., min_length=30)
+    treatment: List[float] = Field(..., min_length=30)
     alpha: float = Field(0.05, ge=0.01, le=0.10)
-    alternative: str = Field("two-sided")
+    alternative: Literal["two-sided", "greater", "less"] = Field("two-sided")
 
 
 class ChiSquaredRequest(BaseModel):
@@ -77,7 +80,7 @@ class ChiSquaredRequest(BaseModel):
     alpha: float = Field(0.05, ge=0.01, le=0.10)
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "control_success": 50,
                 "control_total": 1000,
@@ -108,7 +111,7 @@ class PowerAnalysisRequest(BaseModel):
     ratio: float = Field(1.0, gt=0, description="Treatment to control ratio")
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "baseline_mean": 100.0,
                 "mde": 5.0,
@@ -127,228 +130,16 @@ class HealthCheckRequest(BaseModel):
     expected_ratio: List[float] = Field([0.5, 0.5], description="Expected group proportions")
 
 
-# =============== LAZY-LOADED MODULES ===============
+# =============== ENGINE ===============
 
-_ab_engine = None
-_health_checker = None
-_interpreter = None
+from modules.ab_testing import ABTestingEngine
 
-def get_ab_engine():
-    """Lazy load AB testing engine"""
-    global _ab_engine
-    if _ab_engine is None:
-        # Import here to avoid streamlit dependency at startup
-        try:
-            from modules_standalone.ab_testing_standalone import ABTestingEngine
-            _ab_engine = ABTestingEngine()
-        except ImportError:
-            # Fallback to inline implementation
-            _ab_engine = create_standalone_ab_engine()
+_ab_engine = ABTestingEngine()
+
+
+def get_ab_engine() -> ABTestingEngine:
+    """Shared A/B testing engine (same code path as the Streamlit app)"""
     return _ab_engine
-
-
-def create_standalone_ab_engine():
-    """Create standalone AB engine without streamlit"""
-    from scipy import stats
-    import numpy as np
-    
-    class StandaloneABEngine:
-        def t_test(self, control, treatment, alpha=0.05, alternative='two-sided'):
-            control = np.array(control)
-            treatment = np.array(treatment)
-            
-            t_stat, p_value = stats.ttest_ind(treatment, control, alternative=alternative)
-            
-            control_mean = np.mean(control)
-            treatment_mean = np.mean(treatment)
-            pooled_std = np.sqrt(
-                ((len(control) - 1) * np.var(control, ddof=1) + 
-                 (len(treatment) - 1) * np.var(treatment, ddof=1)) / 
-                (len(control) + len(treatment) - 2)
-            )
-            
-            cohens_d = (treatment_mean - control_mean) / pooled_std
-            se = pooled_std * np.sqrt(1/len(control) + 1/len(treatment))
-            df = len(control) + len(treatment) - 2
-            t_critical = stats.t.ppf(1 - alpha/2, df)
-            ci_lower = (treatment_mean - control_mean) - t_critical * se
-            ci_upper = (treatment_mean - control_mean) + t_critical * se
-            relative_lift = ((treatment_mean - control_mean) / control_mean) * 100
-            
-            return {
-                'test_type': 't-test',
-                't_statistic': float(t_stat),
-                'p_value': float(p_value),
-                'control_mean': float(control_mean),
-                'treatment_mean': float(treatment_mean),
-                'control_std': float(np.std(control, ddof=1)),
-                'treatment_std': float(np.std(treatment, ddof=1)),
-                'control_n': int(len(control)),
-                'treatment_n': int(len(treatment)),
-                'mean_difference': float(treatment_mean - control_mean),
-                'cohens_d': float(cohens_d),
-                'ci_lower': float(ci_lower),
-                'ci_upper': float(ci_upper),
-                'relative_lift': float(relative_lift),
-                'significant': bool(p_value < alpha),
-                'alpha': alpha
-            }
-        
-        def z_test(self, control, treatment, alpha=0.05, alternative='two-sided'):
-            control = np.array(control)
-            treatment = np.array(treatment)
-            
-            control_mean = np.mean(control)
-            treatment_mean = np.mean(treatment)
-            control_std = np.std(control, ddof=1)
-            treatment_std = np.std(treatment, ddof=1)
-            
-            se = np.sqrt((control_std**2 / len(control)) + (treatment_std**2 / len(treatment)))
-            z_stat = (treatment_mean - control_mean) / se
-            
-            if alternative == 'two-sided':
-                p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))
-            elif alternative == 'greater':
-                p_value = 1 - stats.norm.cdf(z_stat)
-            else:
-                p_value = stats.norm.cdf(z_stat)
-            
-            z_critical = stats.norm.ppf(1 - alpha/2)
-            ci_lower = (treatment_mean - control_mean) - z_critical * se
-            ci_upper = (treatment_mean - control_mean) + z_critical * se
-            
-            pooled_std = np.sqrt((control_std**2 + treatment_std**2) / 2)
-            cohens_d = (treatment_mean - control_mean) / pooled_std
-            relative_lift = ((treatment_mean - control_mean) / control_mean) * 100
-            
-            return {
-                'test_type': 'z-test',
-                'z_statistic': float(z_stat),
-                'p_value': float(p_value),
-                'control_mean': float(control_mean),
-                'treatment_mean': float(treatment_mean),
-                'control_std': float(control_std),
-                'treatment_std': float(treatment_std),
-                'control_n': int(len(control)),
-                'treatment_n': int(len(treatment)),
-                'mean_difference': float(treatment_mean - control_mean),
-                'cohens_d': float(cohens_d),
-                'ci_lower': float(ci_lower),
-                'ci_upper': float(ci_upper),
-                'relative_lift': float(relative_lift),
-                'significant': bool(p_value < alpha),
-                'alpha': alpha
-            }
-        
-        def chi_squared_test(self, control_success, control_total, treatment_success, treatment_total, alpha=0.05):
-            observed = np.array([
-                [treatment_success, treatment_total - treatment_success],
-                [control_success, control_total - control_success]
-            ])
-            
-            chi2, p_value, dof, expected = stats.chi2_contingency(observed)
-            
-            control_rate = control_success / control_total
-            treatment_rate = treatment_success / treatment_total
-            
-            se = np.sqrt(
-                (control_rate * (1 - control_rate) / control_total) +
-                (treatment_rate * (1 - treatment_rate) / treatment_total)
-            )
-            z_critical = stats.norm.ppf(1 - alpha/2)
-            diff = treatment_rate - control_rate
-            ci_lower = diff - z_critical * se
-            ci_upper = diff + z_critical * se
-            
-            relative_lift = ((treatment_rate - control_rate) / control_rate) * 100 if control_rate > 0 else 0
-            
-            return {
-                'test_type': 'chi-squared',
-                'chi2_statistic': float(chi2),
-                'p_value': float(p_value),
-                'degrees_of_freedom': int(dof),
-                'control_rate': float(control_rate),
-                'treatment_rate': float(treatment_rate),
-                'control_n': int(control_total),
-                'treatment_n': int(treatment_total),
-                'rate_difference': float(diff),
-                'ci_lower': float(ci_lower),
-                'ci_upper': float(ci_upper),
-                'relative_lift': float(relative_lift),
-                'significant': bool(p_value < alpha),
-                'alpha': alpha
-            }
-        
-        def bayesian_ab_test(self, control_success, control_total, treatment_success, treatment_total,
-                           prior_alpha=1.0, prior_beta=1.0):
-            control_alpha = prior_alpha + control_success
-            control_beta = prior_beta + (control_total - control_success)
-            treatment_alpha = prior_alpha + treatment_success
-            treatment_beta = prior_beta + (treatment_total - treatment_success)
-            
-            control_mean = control_alpha / (control_alpha + control_beta)
-            treatment_mean = treatment_alpha / (treatment_alpha + treatment_beta)
-            
-            np.random.seed(42)
-            n_samples = 100000
-            control_samples = np.random.beta(control_alpha, control_beta, n_samples)
-            treatment_samples = np.random.beta(treatment_alpha, treatment_beta, n_samples)
-            
-            prob_treatment_better = np.mean(treatment_samples > control_samples)
-            lift_samples = (treatment_samples - control_samples) / control_samples
-            expected_lift = np.mean(lift_samples) * 100
-            lift_ci_lower = np.percentile(lift_samples, 2.5) * 100
-            lift_ci_upper = np.percentile(lift_samples, 97.5) * 100
-            
-            return {
-                'test_type': 'bayesian',
-                'control_posterior_alpha': float(control_alpha),
-                'control_posterior_beta': float(control_beta),
-                'treatment_posterior_alpha': float(treatment_alpha),
-                'treatment_posterior_beta': float(treatment_beta),
-                'control_mean': float(control_mean),
-                'treatment_mean': float(treatment_mean),
-                'prob_treatment_better': float(prob_treatment_better),
-                'expected_lift': float(expected_lift),
-                'lift_ci_lower': float(lift_ci_lower),
-                'lift_ci_upper': float(lift_ci_upper),
-                'control_n': int(control_total),
-                'treatment_n': int(treatment_total)
-            }
-        
-        def calculate_sample_size(self, baseline_mean, mde, baseline_std, alpha=0.05, power=0.80, ratio=1.0):
-            try:
-                from statsmodels.stats.power import tt_ind_solve_power
-                
-                effect_size = (mde / 100) * baseline_mean
-                cohens_d = effect_size / baseline_std
-                
-                n_control = tt_ind_solve_power(
-                    effect_size=cohens_d,
-                    alpha=alpha,
-                    power=power,
-                    ratio=ratio,
-                    alternative='two-sided'
-                )
-                
-                n_treatment = n_control * ratio
-                total_n = n_control + n_treatment
-                
-                return {
-                    'n_control': int(np.ceil(n_control)),
-                    'n_treatment': int(np.ceil(n_treatment)),
-                    'total_sample_size': int(np.ceil(total_n)),
-                    'cohens_d': float(cohens_d),
-                    'mde_absolute': float(effect_size),
-                    'mde_percentage': float(mde),
-                    'alpha': alpha,
-                    'power': power,
-                    'ratio': ratio
-                }
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Power analysis error: {str(e)}")
-    
-    return StandaloneABEngine()
 
 
 # =============== API ENDPOINTS ===============
@@ -392,7 +183,8 @@ async def run_t_test(request: TTestRequest):
             control=np.array(request.control),
             treatment=np.array(request.treatment),
             alpha=request.alpha,
-            alternative=request.alternative
+            alternative=request.alternative,
+            equal_var=request.equal_var
         )
         return JSONResponse(content=results)
     except Exception as e:

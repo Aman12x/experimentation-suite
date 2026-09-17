@@ -26,16 +26,16 @@ class StatisticalInterpreter:
             strength = "strong" if p_value < 0.01 else "moderate"
             return (
                 f"📊 **Statistically Significant** (p={p_value:.4f})\n\n"
-                f"We have {strength} evidence that the observed difference is real and not due to random chance. "
-                f"If there were truly no difference between groups, we would see results this extreme "
-                f"only {p_value*100:.2f}% of the time by pure luck."
+                f"We have {strength} evidence of a real difference between the groups. "
+                f"If there were truly no difference, a result at least this extreme "
+                f"would show up only {p_value*100:.2f}% of the time."
             )
         else:
             return (
                 f"📊 **Not Statistically Significant** (p={p_value:.4f})\n\n"
                 f"We don't have sufficient evidence to conclude there's a real difference. "
-                f"The observed results could easily happen by random chance "
-                f"({p_value*100:.1f}% probability), so we cannot confidently say the treatment had an effect."
+                f"If there were truly no difference, a result at least this extreme would still "
+                f"show up {p_value*100:.1f}% of the time, so we cannot confidently say the treatment had an effect."
             )
     
     @staticmethod
@@ -150,17 +150,22 @@ class StatisticalInterpreter:
                     f"({abs(relative_lift):.2f}%). Consider whether this improvement justifies "
                     f"the implementation cost.\n\n"
                 )
-            elif abs(relative_lift) > 20:
+            elif relative_lift > 20:
                 interpretation += (
                     f"🚀 **Strong Impact:** This is a substantial effect ({abs(relative_lift):.2f}%). "
                     f"Strong candidate for implementation.\n\n"
+                )
+            elif relative_lift < -20:
+                interpretation += (
+                    f"🛑 **Strong Negative Impact:** The treatment lowered the metric by "
+                    f"{abs(relative_lift):.2f}%.\n\n"
                 )
         else:
             interpretation += (
                 f"### ❌ No Significant Difference Found\n\n"
                 f"The data doesn't provide strong enough evidence that the treatment "
-                f"actually changed the metric. The {abs(relative_lift):.2f}% difference "
-                f"we observed could easily be due to random chance.\n\n"
+                f"actually changed the metric. A {abs(relative_lift):.2f}% difference "
+                f"is within what random variation alone can produce at this sample size.\n\n"
             )
         
         # Statistical details
@@ -187,12 +192,17 @@ class StatisticalInterpreter:
         
         # Recommendation
         interpretation += "### 💡 Recommendation\n\n"
-        if significant and abs(relative_lift) > 2:
+        if significant and relative_lift < 0:
+            interpretation += (
+                "**❌ DO NOT IMPLEMENT:** The treatment performed significantly worse than control. "
+                "If a lower value of this metric is the goal (e.g. churn or load time), read this as a win instead."
+            )
+        elif significant and relative_lift > 2:
             interpretation += (
                 "**✅ RECOMMEND:** Implement the treatment. The results show a statistically "
                 "significant and practically meaningful improvement."
             )
-        elif significant and abs(relative_lift) <= 2:
+        elif significant:
             interpretation += (
                 "**⚠️ PROCEED WITH CAUTION:** While statistically significant, the effect size is small. "
                 "Weigh the implementation costs against the modest gains."
@@ -330,7 +340,22 @@ class StatisticalInterpreter:
                 f"pre-existing differences between groups and common time trends.\n\n"
             )
             
-            if results.get('parallel_trends_assumption', False):
+            if results.get('p_value', 1) < 0.05:
+                interpretation += (
+                    f"✅ **Statistically Significant:** p={results['p_value']:.4f}, "
+                    f"95% CI [{results['ci_lower']:.4f}, {results['ci_upper']:.4f}] "
+                    f"using {results.get('se_type', 'OLS')} standard errors.\n\n"
+                )
+            
+            parallel = results.get('parallel_trends_assumption')
+            if parallel is None:
+                interpretation += (
+                    f"ℹ️ **Parallel Trends:** Not testable with one pre and one post period. "
+                    f"The estimate is only causal if both groups would have moved together without "
+                    f"the intervention. A gap in levels between groups is fine; diverging trends are not. "
+                    f"Check it with several pre-treatment periods if you have them.\n\n"
+                )
+            elif parallel:
                 interpretation += (
                     f"✅ **Parallel Trends:** The pre-treatment trends appear similar, "
                     f"supporting the validity of the DiD approach.\n\n"
@@ -340,5 +365,29 @@ class StatisticalInterpreter:
                     f"⚠️ **Warning:** Pre-treatment trends may differ, which could violate "
                     f"the parallel trends assumption required for DiD.\n\n"
                 )
+        
+        elif method == "IV":
+            interpretation = (
+                f"## 🎻 Instrumental Variables Results\n\n"
+                f"**2SLS Estimate:** {results['iv_estimate']:+.4f} "
+                f"(95% CI [{results['ci_lower']:.4f}, {results['ci_upper']:.4f}], p={results['p_value']:.4f})\n\n"
+                f"**Naive OLS Estimate:** {results['ols_estimate']:+.4f}. A large gap between the two "
+                f"points to confounding that the instrument removes.\n\n"
+            )
+            
+            if results.get('weak_instrument'):
+                interpretation += (
+                    f"⚠️ **Weak Instrument:** The instrument's first-stage F is "
+                    f"{results['first_stage_f_stat']:.2f} (< 10). 2SLS estimates are biased toward OLS "
+                    f"and the confidence interval is unreliable.\n\n"
+                )
+            else:
+                interpretation += (
+                    f"✅ **Instrument Strength:** First-stage F for the instrument is "
+                    f"{results['first_stage_f_stat']:.2f} (≥ 10).\n\n"
+                )
+        
+        else:
+            raise ValueError(f"Unknown method '{method}'")
         
         return interpretation
