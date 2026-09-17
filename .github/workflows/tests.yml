@@ -85,3 +85,47 @@ jobs:
     - name: Tear down
       if: always()
       run: docker compose down
+
+
+  deploy:
+    # Ships to Cloud Run only after the tests and the Docker checks pass on main
+    needs: [test, docker]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-cloud-run
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write   # keyless auth to Google Cloud, no stored secrets
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: projects/526867948326/locations/global/workloadIdentityPools/github/providers/experimentation-suite
+        service_account: github-deployer@experimentation-suite-260917.iam.gserviceaccount.com
+    
+    - name: Set up gcloud
+      uses: google-github-actions/setup-gcloud@v2
+    
+    - name: Deploy to Cloud Run
+      run: |
+        gcloud run deploy experimentation-suite \
+          --source . \
+          --project experimentation-suite-260917 \
+          --region us-east4 \
+          --port 8501 --memory 1Gi --cpu 1 \
+          --min-instances 0 --max-instances 1 \
+          --session-affinity --timeout 3600 \
+          --allow-unauthenticated --quiet
+    
+    - name: Verify the live service
+      run: |
+        URL=$(gcloud run services describe experimentation-suite \
+          --project experimentation-suite-260917 --region us-east4 --format='value(status.url)')
+        echo "Deployed to $URL"
+        curl -fsS --retry 5 --retry-delay 5 "$URL/_stcore/health"
