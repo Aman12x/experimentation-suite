@@ -1,9 +1,9 @@
 # 🏗️ Architecture
 
-## One engine, three front ends
+## One engine, four front ends
 
 ```
-  Streamlit UI (app.py)     REST API (api_server.py)     CLI (demo.py, validate.py)
+  Streamlit UI (app.py)   REST API (api_server.py)   MCP server (mcp_server.py)   CLI (demo.py, validate.py)
             │                          │                            │
             └──────────────┬───────────┴────────────────────────────┘
                            ▼
@@ -51,6 +51,11 @@ Method-specific extras sit alongside (`variance_reduction_pct` for CUPED, `looks
 | The bootstrap resamples in chunks, scales its resample count, and refuses very large inputs | Memory stays flat on a 1 GiB instance; beyond a few hundred thousand units Welch gives the same answer |
 | A single day with a broken traffic split invalidates the decision | Overall counts can average out a day where assignment or logging failed |
 | Dependencies are locked | The image is rebuilt on every push; without a lock each deploy could pick up untested library releases |
+| Tests also run from summary statistics | Means, variances and covariances are sufficient for every parametric test here, so a warehouse can aggregate any number of rows and ship back a handful of numbers. Equality with the row-level path is enforced by running the generated SQL on DuckDB in the tests |
+| The SQL builder validates identifiers and takes no free-text SQL | Its callers include LLM agents; whatever they are told, the only statement it can emit is the aggregate query |
+| The suite is an MCP server, not an MCP client | MCP is for a model choosing tools. The agent pairs this server with a warehouse server; a form that already knows its query would use a plain database driver instead |
+| MCP tool errors carry the validation message | The SDK hides the text of unexpected exceptions from clients. Bad input is raised as a `ToolError` so the agent can read what to fix |
+| HTTP mode refuses to start without a bearer token | A statistics endpoint is harmless; an unauthenticated public compute endpoint is not |
 | Missing values raise | A NaN would otherwise propagate into a NaN statistic |
 
 ## Decision precedence
@@ -66,6 +71,8 @@ Method-specific extras sit alongside (`variance_reduction_pct` for CUPED, `looks
 | Known-effect recovery | PSM, DiD, event study, and IV recover a planted effect that a naive comparison misses | `test_causal_inference.py`, `test_decision_and_event_study.py` |
 | Properties | Generated inputs never produce NaN, infinities, invalid JSON, a wrong-direction recommendation, or a lost unit | `test_properties.py` |
 | Behaviour | Recommendations respect direction; guardrails block; reports escape input | `test_health_and_interpretation.py`, `test_reports.py` |
+| Warehouse path | Generated SQL run on DuckDB, fed to the from-stats methods, equals the row-level analysis to 1e-9; injection attempts are refused | `test_from_stats_and_sql.py` |
+| MCP | The agent workflow end to end against DuckDB, tool errors, a real stdio subprocess, bearer auth over HTTP | `test_mcp_server.py` |
 | API | Every advertised route exists, validates input, and returns JSON-safe output | `test_api.py` |
 | End to end | The Streamlit app is driven headlessly through each flow on the sample data | `test_app.py` |
 

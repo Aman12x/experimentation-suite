@@ -7,6 +7,9 @@ uvicorn[standard]
 python-multipart
 pydantic
 
+# MCP server (mcp_server.py). 2.x renamed FastMCP to MCPServer.
+mcp>=2,<3
+
 # Data Processing
 pandas
 numpy

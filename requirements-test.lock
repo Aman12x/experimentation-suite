@@ -9,6 +9,9 @@ annotated-types==0.8.0
 anyio==4.15.1
     # via
     #   httpx
+    #   httpx2
+    #   mcp
+    #   sse-starlette
     #   starlette
     #   watchfiles
 attrs==26.1.0
@@ -24,6 +27,8 @@ certifi==2026.7.22
     #   httpcore
     #   httpx
     #   requests
+cffi==2.1.1 ; platform_python_implementation != 'PyPy'
+    # via cryptography
 charset-normalizer==3.5.1
     # via requests
 click==8.5.0
@@ -36,6 +41,10 @@ colorama==0.4.6 ; sys_platform == 'win32'
     # via pytest
 coverage==7.16.1
     # via pytest-cov
+cryptography==50.0.1
+    # via pyjwt
+duckdb==1.5.5
+    # via -r requirements-test.txt
 et-xmlfile==2.0.0
     # via openpyxl
 fastapi==0.141.1
@@ -51,19 +60,27 @@ gitpython==3.1.62
 h11==0.16.0
     # via
     #   httpcore
+    #   httpcore2
     #   uvicorn
 httpcore==1.0.9
     # via httpx
+httpcore2==2.13.0 ; sys_platform != 'emscripten'
+    # via httpx2
 httptools==0.8.0
     # via uvicorn
 httpx==0.28.1
     # via -r requirements-test.txt
+httpx2==2.13.0
+    # via mcp
+httpx2-jsfetch==1.0 ; python_full_version >= '3.12' and sys_platform == 'emscripten'
+    # via httpx2
 hypothesis==6.168.0
     # via -r requirements-test.txt
 idna==3.20
     # via
     #   anyio
     #   httpx
+    #   httpx2
     #   requests
 iniconfig==2.3.0
     # via pytest
@@ -76,7 +93,9 @@ jinja2==3.1.6
 joblib==1.6.0
     # via scikit-learn
 jsonschema==4.26.0
-    # via altair
+    # via
+    #   altair
+    #   mcp
 jsonschema-specifications==2025.9.1
     # via jsonschema
 markdown-it-py==4.2.0
@@ -85,6 +104,10 @@ markupsafe==3.0.3
     # via jinja2
 mccabe==0.7.0
     # via flake8
+mcp==2.2.0
+    # via -r requirements.txt
+mcp-types==2.2.0
+    # via mcp
 mdurl==0.1.2
     # via markdown-it-py
 narwhals==2.26.0
@@ -117,6 +140,8 @@ numpy==2.5.3 ; python_full_version >= '3.12'
     #   streamlit
 openpyxl==3.1.5
     # via -r requirements.txt
+opentelemetry-api==1.44.0
+    # via mcp
 packaging==24.2
     # via
     #   altair
@@ -147,10 +172,14 @@ pyarrow==25.0.1
     # via streamlit
 pycodestyle==2.14.0
     # via flake8
+pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+    # via cffi
 pydantic==2.13.5
     # via
     #   -r requirements.txt
     #   fastapi
+    #   mcp
+    #   mcp-types
 pydantic-core==2.46.5
     # via pydantic
 pydeck==0.9.3
@@ -161,6 +190,8 @@ pygments==2.21.0
     # via
     #   pytest
     #   rich
+pyjwt==2.14.0
+    # via mcp
 pytest==9.1.1
     # via
     #   -r requirements-test.txt
@@ -172,9 +203,13 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.2.3
     # via uvicorn
 python-multipart==0.0.32
-    # via -r requirements.txt
+    # via
+    #   -r requirements.txt
+    #   mcp
 pytz==2026.3.post1
     # via pandas
+pywin32==312 ; sys_platform == 'win32'
+    # via mcp
 pyyaml==6.0.3
     # via uvicorn
 referencing==0.37.0
@@ -211,8 +246,13 @@ smmap==5.0.3
     # via gitdb
 sortedcontainers==2.4.0
     # via hypothesis
+sse-starlette==3.4.11
+    # via mcp
 starlette==1.6.0
-    # via fastapi
+    # via
+    #   fastapi
+    #   mcp
+    #   sse-starlette
 statsmodels==0.15.0
     # via -r requirements.txt
 streamlit==1.41.1
@@ -227,12 +267,20 @@ tomli==2.4.1 ; python_full_version <= '3.11'
     # via coverage
 tornado==6.5.10
     # via streamlit
+truststore==0.10.4 ; sys_platform != 'emscripten'
+    # via
+    #   httpcore2
+    #   httpx2
 typing-extensions==4.16.0
     # via
     #   altair
     #   anyio
     #   fastapi
     #   formulaic
+    #   httpx2
+    #   mcp
+    #   mcp-types
+    #   opentelemetry-api
     #   pydantic
     #   pydantic-core
     #   referencing
@@ -242,13 +290,16 @@ typing-extensions==4.16.0
 typing-inspection==0.4.4
     # via
     #   fastapi
+    #   mcp
     #   pydantic
 tzdata==2026.4
     # via pandas
 urllib3==2.8.0
     # via requests
 uvicorn==0.53.0
-    # via -r requirements.txt
+    # via
+    #   -r requirements.txt
+    #   mcp
 uvloop==0.22.1 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
     # via uvicorn
 watchdog==6.0.0 ; sys_platform != 'darwin'

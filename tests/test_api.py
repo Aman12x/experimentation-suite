@@ -398,3 +398,33 @@ class TestAdvancedAndCausalEndpoints:
         advertised = client.get("/").json()["endpoints"].values()
         paths = client.get("/openapi.json").json()["paths"]
         assert all(path in paths for path in advertised)
+
+
+class TestWarehouseEndpoints:
+    
+    @pytest.mark.integration
+    def test_query_then_analyze_round_trip(self):
+        duckdb = pytest.importorskip("duckdb")
+        csv = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "data", "multivariant_checkout_test.csv")
+        plan = client.post("/api/warehouse/query", json={
+            "dialect": "duckdb", "table": "checkout", "assignment_col": "variant",
+            "metric_col": "converted", "analysis": "proportion"})
+        assert plan.status_code == 200
+        
+        con = duckdb.connect()
+        con.execute(f"CREATE TABLE checkout AS SELECT * FROM read_csv_auto('{csv}')")
+        rows = con.execute(plan.json()["sql"]).df().to_dict("records")
+        
+        out = client.post("/api/warehouse/analyze", json={
+            "rows": rows, "control_label": "control", "analysis": "proportion"})
+        assert out.status_code == 200
+        body = out.json()
+        assert {c["variant"] for c in body["comparisons"]} == {"one_page_checkout", "express_pay"}
+        assert body["sample_ratio_check"]["has_srm"] is False
+    
+    @pytest.mark.integration
+    def test_injection_attempt_is_a_400(self):
+        r = client.post("/api/warehouse/query", json={
+            "dialect": "postgres", "table": "t; DROP TABLE users", "assignment_col": "v", "metric_col": "m"})
+        assert r.status_code == 400

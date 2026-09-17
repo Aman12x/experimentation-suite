@@ -4,3 +4,4 @@ pytest-cov
 httpx
 flake8
 hypothesis
+duckdb

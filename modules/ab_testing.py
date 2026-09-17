@@ -11,9 +11,10 @@ from statsmodels.stats.proportion import proportions_ztest, proportion_effectsiz
 from typing import Dict, Tuple, Optional, List
 
 from .ab_advanced import AdvancedABMethods, as_clean_array, relative_lift_fields
+from .from_stats import FromStatsMethods
 
 
-class ABTestingEngine(AdvancedABMethods):
+class ABTestingEngine(AdvancedABMethods, FromStatsMethods):
     """Comprehensive A/B testing engine with multiple statistical methods"""
     
     def __init__(self):

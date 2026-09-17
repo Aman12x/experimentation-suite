@@ -43,6 +43,11 @@ An A/B testing and causal inference toolkit that answers the question a product 
 - Event-study DiD with a joint **pre-trend test** when several pre-treatment periods exist
 - Instrumental variables by 2SLS, with a weak-instrument check on the instrument's **partial** first-stage F
 
+**Warehouse scale and AI agents**
+- Every parametric test also runs **from summary statistics**: `n`, mean and variance per arm (plus a covariance for CUPED and ratio metrics). One `GROUP BY` in BigQuery, Snowflake or Postgres replaces moving the rows, and the result matches the row-level analysis exactly
+- `modules/sql_templates.py` writes that query per dialect, including the collapse to one row per randomized unit. It accepts only plain identifiers, so it cannot be used to inject SQL
+- **MCP server** (`mcp_server.py`): an agent asks for the SQL, runs it through any warehouse MCP server, hands back a few aggregate rows, and gets tests, a traffic-split check and a ship decision. See [docs/WAREHOUSE_MCP.md](docs/WAREHOUSE_MCP.md)
+
 **Output**
 - Plain-English interpretation of every result
 - Excel, Markdown, and HTML reports that lead with the decision
@@ -79,6 +84,7 @@ streamlit run app.py        # UI on http://localhost:8501
 python api_server.py        # API on http://localhost:8000, docs at /docs
 python demo.py              # command-line tour, no server
 python validate.py          # simulation report shown above
+python mcp_server.py        # MCP server over stdio, for Claude Code / Claude Desktop
 ```
 
 No data needed: pick one of the bundled datasets under **"Or try a sample dataset"** in the sidebar. The *multi-variant checkout test* shows the most in one run: three arms, a covariate for CUPED, and a variant that wins on revenue while slowing page loads.
@@ -162,6 +168,7 @@ pre_trends = lab.event_study(df, "region", ["year", "quarter"], "sales",
 | `POST /api/ab-test/multi-variant` | Many variants, corrected p-values |
 | `POST /api/ab-test/sequential` | Always-valid monitoring |
 | `POST /api/ab-test/bayesian`, `/power-analysis` | Bayesian test, sample size |
+| `POST /api/warehouse/query`, `/api/warehouse/analyze` | Aggregate SQL for your warehouse, then analysis from its result rows |
 | `POST /api/health-check` | SRM and data-quality checks |
 | `POST /api/decision` | Ship decision from test outputs |
 | `POST /api/causal/psm`, `/did`, `/iv` | Causal methods on row records |
@@ -183,16 +190,20 @@ app.py                  Streamlit UI
 api_server.py           FastAPI server (same engine as the UI)
 demo.py                 Command-line tour
 validate.py             Simulation report
+mcp_server.py           MCP server for AI agents (stdio or authenticated HTTP)
 modules/
   ab_testing.py         Core tests, power analysis, Bayesian
   ab_advanced.py        Proportions, lift CI, CUPED, bootstrap, multi-variant, sequential
   causal_inference.py   PSM, DiD, event study, IV
   health_checks.py      SRM and data-quality checks
   experiment_design.py  Unit-level aggregation, metric typing, test recommendation
+  from_stats.py         The same tests from per-arm summary statistics
+  sql_templates.py      Per-dialect aggregate SQL, identifier-validated
   data_handler.py       Loading and validation
   visualizations.py     Plotly charts
 utils/
   decision.py           Ship decision
+  warehouse.py          Aggregate rows -> tests, split check, decisions
   interpreters.py       Plain-English explanations
   report_generator.py   Excel / Markdown / HTML export
 data/                   Sample datasets and the generator for the synthetic one

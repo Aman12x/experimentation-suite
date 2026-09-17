@@ -166,6 +166,43 @@ class RatioMetricRequest(BaseModel):
     alpha: float = Field(0.05, ge=0.01, le=0.10)
 
 
+class WarehouseQueryRequest(BaseModel):
+    """Request model for the aggregate SQL a warehouse should run"""
+    dialect: Literal["bigquery", "snowflake", "postgres", "duckdb"]
+    table: str
+    assignment_col: str
+    metric_col: str
+    analysis: Literal["mean", "proportion", "cuped", "ratio"] = "mean"
+    unit_col: Optional[str] = None
+    second_col: Optional[str] = Field(None, description="Covariate for cuped, denominator for ratio")
+    unit_agg: Literal["mean", "sum", "max"] = "mean"
+    time_col: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+
+class AggregatesRequest(BaseModel):
+    """Request model for analysis from per-arm aggregate rows"""
+    rows: List[Dict[str, Any]] = Field(..., min_length=2, description="One row per arm, as returned by the generated SQL")
+    control_label: str
+    analysis: Literal["mean", "proportion", "cuped", "ratio"] = "mean"
+    higher_is_better: bool = True
+    alpha: float = Field(0.05, ge=0.01, le=0.10)
+    correction: Literal["holm", "bonferroni", "fdr_bh", "none"] = "holm"
+    mde_pct: Optional[float] = Field(None, ge=0)
+    expected_split: Optional[Dict[str, float]] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "rows": [{"arm": "control", "n": 2010, "mean": 51.2, "var": 410.5},
+                         {"arm": "treatment", "n": 1990, "mean": 53.0, "var": 422.1}],
+                "control_label": "control",
+                "mde_pct": 2.0
+            }
+        }
+
+
 class CupedRequest(BaseModel):
     """Request model for CUPED variance reduction"""
     control: List[float] = Field(..., min_length=2)
@@ -247,6 +284,8 @@ from modules.ab_testing import ABTestingEngine
 from modules.causal_inference import CausalInferenceLab
 from modules.health_checks import HealthChecker
 from utils.decision import ship_decision
+from utils.warehouse import analyze_aggregates
+from modules.sql_templates import aggregate_sql
 
 _ab_engine = ABTestingEngine()
 _causal_lab = CausalInferenceLab()
@@ -304,6 +343,8 @@ async def root():
             "bootstrap": "/api/ab-test/bootstrap",
             "cuped": "/api/ab-test/cuped",
             "ratio-metric": "/api/ab-test/ratio-metric",
+            "warehouse-query": "/api/warehouse/query",
+            "warehouse-analyze": "/api/warehouse/analyze",
             "multi-variant": "/api/ab-test/multi-variant",
             "sequential": "/api/ab-test/sequential",
             "health-check": "/api/health-check",
@@ -490,6 +531,18 @@ async def run_sequential(request: SequentialRequest):
         np.array(request.control), np.array(request.treatment),
         alpha=request.alpha, tau=request.tau, n_looks=request.n_looks
     )
+
+
+@app.post("/api/warehouse/query")
+async def warehouse_query(request: WarehouseQueryRequest):
+    """The one aggregate SQL statement to run in your warehouse; returns one row per arm"""
+    return _run("warehouse-query", aggregate_sql, **request.model_dump())
+
+
+@app.post("/api/warehouse/analyze")
+async def warehouse_analyze(request: AggregatesRequest):
+    """Tests, sample-ratio check and ship decision from the aggregate rows. No row-level data needed."""
+    return _run("warehouse-analyze", analyze_aggregates, **request.model_dump())
 
 
 @app.post("/api/health-check")
