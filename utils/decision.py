@@ -5,6 +5,8 @@ Combines the primary metric, guardrail metrics, and health checks into one call
 
 from typing import Dict, List, Optional
 
+from modules.ab_advanced import format_change
+
 
 SHIP = "SHIP"
 DO_NOT_SHIP = "DO NOT SHIP"
@@ -69,21 +71,21 @@ def ship_decision(
         r = guardrails[name]
         reasons.append(
             f"Guardrail '{name}' got significantly worse "
-            f"({r.get('relative_lift', 0):+.2f}%, p={r['p_value']:.4f})."
+            f"({format_change(r)}, p={r['p_value']:.4f})."
         )
     
-    lift = primary.get('relative_lift', 0)
+    change = format_change(primary)
     primary_bad = _harmful(primary, higher_is_better)
     primary_good = bool(primary.get('significant')) and not primary_bad
     
     if harmed or primary_bad:
         if primary_bad:
-            reasons.append(f"Primary metric got significantly worse ({lift:+.2f}%, p={primary['p_value']:.4f}).")
+            reasons.append(f"Primary metric got significantly worse ({change}, p={primary['p_value']:.4f}).")
         elif primary_good:
-            reasons.append(f"Primary metric improved ({lift:+.2f}%), but not at the cost of a guardrail.")
+            reasons.append(f"Primary metric improved ({change}), but not at the cost of a guardrail.")
         decision = DO_NOT_SHIP
     elif primary_good:
-        reasons.append(f"Primary metric improved significantly ({lift:+.2f}%, p={primary['p_value']:.4f}).")
+        reasons.append(f"Primary metric improved significantly ({change}, p={primary['p_value']:.4f}).")
         if guardrails:
             reasons.append(f"All {len(guardrails)} guardrail metrics held.")
         decision = SHIP

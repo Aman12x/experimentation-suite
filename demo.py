@@ -13,6 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from modules import ABTestingEngine, CausalInferenceLab, HealthChecker
+from modules.ab_advanced import format_change
 from utils import ship_decision
 
 DATA_DIR = Path(__file__).parent / 'data'
@@ -36,7 +37,7 @@ groups = {g: d.revenue.values for g, d in df.groupby('variant')}
 mv = engine.multi_variant_test(groups, 'control', correction='holm')
 print(f"\nRevenue vs control ({mv['correction']}-corrected):")
 for c in mv['comparisons']:
-    print(f"  {c['group']:<20} lift {c['relative_lift']:+6.2f}%   "
+    print(f"  {c['group']:<20} lift {format_change(c):>8}   "
           f"p_raw={c['p_value_raw']:.4f}   p_adj={c['p_value_adjusted']:.4f}   "
           f"{'significant' if c['significant'] else 'not significant'}")
 print(f"  Best variant: {mv['best_variant']}")

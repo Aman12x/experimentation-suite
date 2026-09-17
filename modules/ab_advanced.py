@@ -24,7 +24,55 @@ def as_clean_array(values: Sequence, name: str) -> np.ndarray:
         raise ValueError(
             f"{name} contains {int(np.isnan(array).sum())} missing values. Drop or impute them first."
         )
+    if np.isinf(array).any():
+        raise ValueError(
+            f"{name} contains {int(np.isinf(array).sum())} infinite values. "
+            "These usually come from a division by zero upstream; fix or drop them first."
+        )
     return array
+
+
+LIFT_UNDEFINED_NOTE = (
+    "Relative lift is not reported because the control mean is zero, negative, or too close to "
+    "zero to divide by reliably. Use the absolute difference."
+)
+
+
+def relative_lift_fields(
+    control_mean: float,
+    treatment_mean: float,
+    control_var_of_mean: Optional[float] = None,
+    treatment_var_of_mean: Optional[float] = None,
+    alpha: float = 0.05
+) -> Dict:
+    """
+    Relative lift and its interval, or an explicit "undefined"
+    
+    A percentage change only means something against a clearly positive
+    baseline. With a control mean near zero the ratio explodes (a +0.3 move
+    reads as +11,000%), and with a negative control mean its sign flips (the
+    metric rises and the "lift" is negative). In those cases relative_lift is
+    None and callers fall back to the absolute difference.
+    """
+    se_control = np.sqrt(control_var_of_mean) if control_var_of_mean is not None else 0.0
+    if not np.isfinite(control_mean) or control_mean <= 0 or control_mean <= 2 * se_control:
+        return {'relative_lift': None, 'relative_lift_note': LIFT_UNDEFINED_NOTE}
+    
+    fields = {'relative_lift': float((treatment_mean / control_mean - 1) * 100)}
+    if control_var_of_mean is not None and treatment_var_of_mean is not None:
+        interval = relative_lift_interval(
+            control_mean, treatment_mean, control_var_of_mean, treatment_var_of_mean, alpha
+        )
+        fields.update(lift_ci_lower=interval['lift_ci_lower'], lift_ci_upper=interval['lift_ci_upper'])
+    return fields
+
+
+def format_change(results: Dict) -> str:
+    """The size of the effect as text: relative lift when defined, absolute difference otherwise"""
+    lift = results.get('relative_lift')
+    if lift is not None:
+        return f"{lift:+.2f}%"
+    return f"{results.get('mean_difference', 0):+.4g} absolute"
 
 
 def relative_lift_interval(
@@ -130,7 +178,7 @@ class AdvancedABMethods:
             'mean_difference': float(diff),
             'ci_lower': float(diff - half_width),
             'ci_upper': float(diff + half_width),
-            **relative_lift_interval(p_c, p_t, var_c, var_t, alpha),
+            **relative_lift_fields(p_c, p_t, var_c, var_t, alpha),
             'significant': bool(p_value < alpha),
             'alpha': alpha
         }
@@ -194,12 +242,12 @@ class AdvancedABMethods:
             'control_mean': unadjusted['control_mean'],
             'treatment_mean': unadjusted['control_mean'] + results['mean_difference'],
         })
-        results['relative_lift'] = (
-            results['mean_difference'] / unadjusted['control_mean'] * 100
-            if unadjusted['control_mean'] != 0 else 0.0
-        )
-        results.pop('lift_ci_lower', None)
-        results.pop('lift_ci_upper', None)
+        for key in ('relative_lift', 'lift_ci_lower', 'lift_ci_upper', 'relative_lift_note'):
+            results.pop(key, None)
+        results.update(relative_lift_fields(
+            results['control_mean'], results['treatment_mean'],
+            np.var(control, ddof=1) / len(control)
+        ))
         return results
 
     def mann_whitney_test(
@@ -236,7 +284,7 @@ class AdvancedABMethods:
             'control_n': int(len(control)),
             'treatment_n': int(len(treatment)),
             'mean_difference': float(treatment_mean - control_mean),
-            'relative_lift': float((treatment_mean - control_mean) / control_mean * 100) if control_mean != 0 else 0.0,
+            **relative_lift_fields(control_mean, treatment_mean, np.var(control, ddof=1) / len(control)),
             'significant': bool(p_value < alpha),
             'alpha': alpha
         }
@@ -279,11 +327,11 @@ class AdvancedABMethods:
             'mean_difference': float(treatment_mean - control_mean),
             'ci_lower': float(ci_lower),
             'ci_upper': float(ci_upper),
-            'relative_lift': float((treatment_mean - control_mean) / control_mean * 100) if control_mean != 0 else 0.0,
+            **relative_lift_fields(control_mean, treatment_mean, np.var(control, ddof=1) / len(control)),
             'n_resamples': n_resamples,
             'alpha': alpha
         }
-        if (boot_c > 0).all():
+        if results['relative_lift'] is not None and (boot_c > 0).all():
             lifts = (boot_t / boot_c - 1) * 100
             lo, hi = np.percentile(lifts, [100 * alpha/2, 100 * (1 - alpha/2)])
             results.update({'lift_ci_lower': float(lo), 'lift_ci_upper': float(hi)})
@@ -449,7 +497,10 @@ class AdvancedABMethods:
             'mean_difference': final['mean_difference'],
             'ci_lower': final['ci_lower'],
             'ci_upper': final['ci_upper'],
-            'relative_lift': final['mean_difference'] / control_mean * 100 if control_mean != 0 else 0.0,
+            **relative_lift_fields(
+                control_mean, control_mean + final['mean_difference'],
+                control.var(ddof=1) / len(control)
+            ),
             'significant': bool(final['always_valid_p_value'] < alpha),
             'could_stop_at_look': stopped_at,
             'could_stop_at_n': (

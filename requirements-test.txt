@@ -1,0 +1,6 @@
+# Tools CI needs on top of requirements.txt
+pytest
+pytest-cov
+httpx
+flake8
+hypothesis

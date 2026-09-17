@@ -69,7 +69,7 @@ The same properties are enforced with tolerances in `tests/`, so a regression in
 ```bash
 git clone https://github.com/Aman12x/experimentation-suite.git
 cd experimentation-suite
-pip install -r requirements.txt
+pip install -r requirements.lock      # exact versions CI tested; requirements.txt lists the direct dependencies
 
 streamlit run app.py        # UI on http://localhost:8501
 python api_server.py        # API on http://localhost:8000, docs at /docs
@@ -199,7 +199,7 @@ The modules have no Streamlit dependency, so they import cleanly into notebooks,
 ## Tests
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -r requirements-test.lock
 pytest                                   # everything
 pytest -m "not slow"                     # skip the simulations
 pytest --cov=modules --cov=utils         # CI fails under 80% coverage

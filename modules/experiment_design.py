@@ -120,7 +120,8 @@ def to_unit_level(
     unit_col: Optional[str],
     assignment_col: str,
     value_cols: List[str],
-    agg: str = 'mean'
+    agg: str = 'mean',
+    order_col: Optional[str] = None
 ) -> Tuple[pd.DataFrame, Dict]:
     """
     Collapse the data to one row per randomization unit
@@ -139,6 +140,9 @@ def to_unit_level(
         assignment_col: Arm assignment column
         value_cols: Metric, guardrail, and covariate columns to carry along
         agg: How to combine a unit's rows: 'mean', 'sum', or 'max'
+        order_col: Optional timestamp (or sequence) column. Units come back ordered by
+            their first appearance, which sequential tests rely on. Without it, the
+            existing row order is taken as arrival order.
 
     Returns:
         (unit-level frame, diagnostics)
@@ -148,6 +152,8 @@ def to_unit_level(
 
     value_cols = list(dict.fromkeys(value_cols))
     data = df.dropna(subset=[assignment_col])
+    if order_col is not None:
+        data = data.sort_values(order_col, kind='stable')
 
     if unit_col is None:
         return data[[assignment_col] + value_cols].copy(), {
@@ -165,7 +171,7 @@ def to_unit_level(
 
     if needs_aggregation:
         unit_df = (
-            data.groupby(unit_col)
+            data.groupby(unit_col, sort=False)   # keep units in order of first appearance
             .agg({assignment_col: 'first', **{c: agg for c in value_cols}})
             .reset_index()
         )

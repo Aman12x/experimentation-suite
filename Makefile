@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test test-cov lint format docker-build docker-run docker-compose-up clean
+.PHONY: help lock install install-dev test test-cov lint format docker-build docker-run docker-compose-up clean
 
 help:
 	@echo "Experimentation Suite - Available Commands:"
@@ -18,7 +18,12 @@ help:
 	@echo ""
 
 install:
-	pip install -r requirements.txt
+	pip install -r requirements.lock
+
+# Re-pin after editing requirements.txt or requirements-test.txt
+lock:
+	uv pip compile requirements.txt --universal --python-version 3.11 -o requirements.lock
+	uv pip compile requirements.txt requirements-test.txt --universal --python-version 3.11 -o requirements-test.lock
 
 install-dev:
 	pip install -r requirements.txt

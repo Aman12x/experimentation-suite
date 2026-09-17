@@ -10,7 +10,7 @@ from statsmodels.stats.power import tt_ind_solve_power, zt_ind_solve_power
 from statsmodels.stats.proportion import proportions_ztest, proportion_effectsize
 from typing import Dict, Tuple, Optional, List
 
-from .ab_advanced import AdvancedABMethods, as_clean_array, relative_lift_interval
+from .ab_advanced import AdvancedABMethods, as_clean_array, relative_lift_fields
 
 
 class ABTestingEngine(AdvancedABMethods):
@@ -92,9 +92,6 @@ class ABTestingEngine(AdvancedABMethods):
             ci_lower = mean_difference - t_critical * se
             ci_upper = mean_difference + t_critical * se
         
-        # Relative lift
-        relative_lift = (mean_difference / control_mean) * 100 if control_mean != 0 else 0.0
-        
         return {
             'test_type': 't-test',
             'variant': 'student' if equal_var else 'welch',
@@ -111,10 +108,8 @@ class ABTestingEngine(AdvancedABMethods):
             'cohens_d': float(cohens_d),
             'ci_lower': float(ci_lower),
             'ci_upper': float(ci_upper),
-            'relative_lift': float(relative_lift),
-            **{k: v for k, v in relative_lift_interval(
-                control_mean, treatment_mean, var_c / n_c, var_t / n_t, alpha
-            ).items() if k != 'relative_lift' and not np.isnan(v)},
+            **(relative_lift_fields(control_mean, treatment_mean, var_c / n_c, var_t / n_t, alpha)
+               if min(n_c, n_t) > 1 else relative_lift_fields(control_mean, treatment_mean)),
             'significant': bool(p_value < alpha),
             'alpha': alpha
         }
@@ -171,8 +166,6 @@ class ABTestingEngine(AdvancedABMethods):
         pooled_std = np.sqrt((control_std**2 + treatment_std**2) / 2)
         cohens_d = (treatment_mean - control_mean) / pooled_std if pooled_std > 0 else 0.0
         
-        relative_lift = ((treatment_mean - control_mean) / control_mean) * 100 if control_mean != 0 else 0.0
-        
         return {
             'test_type': 'z-test',
             'z_statistic': float(z_stat),
@@ -187,11 +180,10 @@ class ABTestingEngine(AdvancedABMethods):
             'cohens_d': float(cohens_d),
             'ci_lower': float(ci_lower),
             'ci_upper': float(ci_upper),
-            'relative_lift': float(relative_lift),
-            **{k: v for k, v in relative_lift_interval(
+            **relative_lift_fields(
                 control_mean, treatment_mean,
                 control_std**2 / len(control), treatment_std**2 / len(treatment), alpha
-            ).items() if k != 'relative_lift' and not np.isnan(v)},
+            ),
             'significant': bool(p_value < alpha),
             'alpha': alpha
         }
@@ -246,7 +238,6 @@ class ABTestingEngine(AdvancedABMethods):
         ci_upper = diff + z_critical * se
         
         # Relative lift
-        relative_lift = ((treatment_rate - control_rate) / control_rate) * 100 if control_rate > 0 else 0
         
         return {
             'test_type': 'chi-squared',
@@ -262,7 +253,8 @@ class ABTestingEngine(AdvancedABMethods):
             'rate_difference': float(diff),
             'ci_lower': float(ci_lower),
             'ci_upper': float(ci_upper),
-            'relative_lift': float(relative_lift),
+            **{k: v for k, v in relative_lift_fields(control_rate, treatment_rate).items()
+               if not k.startswith('lift_ci')},
             'significant': bool(p_value < alpha),
             'alpha': alpha
         }

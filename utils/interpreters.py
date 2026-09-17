@@ -6,6 +6,8 @@ Provides plain English explanations of statistical results
 from typing import Dict, List
 import numpy as np
 
+from modules.ab_advanced import format_change
+
 
 class StatisticalInterpreter:
     """Translates statistical jargon into business-friendly language"""
@@ -131,9 +133,17 @@ class StatisticalInterpreter:
         # Get means
         control_mean = results.get('control_mean', 0)
         treatment_mean = results.get('treatment_mean', 0)
-        relative_lift = results.get('relative_lift', 0)
-        # Signed so that positive always means "moved in the good direction"
-        benefit = relative_lift if higher_is_better else -relative_lift
+        relative_lift = results.get('relative_lift')
+        lift_defined = relative_lift is not None
+        mean_difference = results.get('mean_difference', treatment_mean - control_mean)
+        change = format_change(results)
+        # Signed so that positive always means "moved in the good direction".
+        # Without a usable baseline the size thresholds below do not apply, only the direction.
+        if lift_defined:
+            benefit = relative_lift if higher_is_better else -relative_lift
+        else:
+            benefit = None
+        good_direction = (mean_difference > 0) == higher_is_better
         
         # Build interpretation
         interpretation = f"## 🎯 Business Interpretation ({test_type})\n\n"
@@ -144,21 +154,21 @@ class StatisticalInterpreter:
             interpretation += (
                 f"### ✅ Significant Result Detected\n\n"
                 f"The treatment group performed **{direction}** than the control group "
-                f"with **{abs(relative_lift):.2f}% {direction.replace('higher', 'increase').replace('lower', 'decrease')}**.\n\n"
+                f"(**{change}**).\n\n"
             )
             
-            if abs(relative_lift) < 1:
+            if lift_defined and abs(relative_lift) < 1:
                 interpretation += (
                     f"⚠️ **Note:** While statistically significant, the effect is quite small "
                     f"({abs(relative_lift):.2f}%). Consider whether this improvement justifies "
                     f"the implementation cost.\n\n"
                 )
-            elif benefit > 20:
+            elif lift_defined and benefit > 20:
                 interpretation += (
                     f"🚀 **Strong Impact:** This is a substantial effect ({abs(relative_lift):.2f}%). "
                     f"Strong candidate for implementation.\n\n"
                 )
-            elif benefit < -20:
+            elif lift_defined and benefit < -20:
                 interpretation += (
                     f"🛑 **Strong Negative Impact:** The treatment moved the metric "
                     f"{abs(relative_lift):.2f}% in the wrong direction.\n\n"
@@ -167,7 +177,7 @@ class StatisticalInterpreter:
             interpretation += (
                 f"### ❌ No Significant Difference Found\n\n"
                 f"The data doesn't provide strong enough evidence that the treatment "
-                f"actually changed the metric. A {abs(relative_lift):.2f}% difference "
+                f"actually changed the metric. A difference of {change} "
                 f"is within what random variation alone can produce at this sample size.\n\n"
             )
         
@@ -175,10 +185,14 @@ class StatisticalInterpreter:
         interpretation += f"### 📊 Statistical Details\n\n"
         interpretation += f"- **Control Mean:** {control_mean:.4f}\n"
         interpretation += f"- **Treatment Mean:** {treatment_mean:.4f}\n"
-        interpretation += f"- **Relative Change:** {relative_lift:+.2f}%"
-        if 'lift_ci_lower' in results:
-            interpretation += f" (95% CI {results['lift_ci_lower']:+.2f}% to {results['lift_ci_upper']:+.2f}%)"
-        interpretation += "\n"
+        if lift_defined:
+            interpretation += f"- **Relative Change:** {relative_lift:+.2f}%"
+            if 'lift_ci_lower' in results:
+                interpretation += f" (95% CI {results['lift_ci_lower']:+.2f}% to {results['lift_ci_upper']:+.2f}%)"
+            interpretation += "\n"
+        else:
+            interpretation += f"- **Absolute Change:** {mean_difference:+.4g}\n"
+            interpretation += f"- ℹ️ {results.get('relative_lift_note', 'Relative lift is not defined for this baseline.')}\n"
         interpretation += f"- **P-value:** {p_value:.4f}\n"
         interpretation += f"- **Sample Sizes:** Control={results.get('control_n', 'N/A')}, Treatment={results.get('treatment_n', 'N/A')}\n\n"
         
@@ -227,11 +241,11 @@ class StatisticalInterpreter:
         
         # Recommendation
         interpretation += "### 💡 Recommendation\n\n"
-        if significant and benefit < 0:
+        if significant and not good_direction:
             interpretation += (
                 "**❌ DO NOT IMPLEMENT:** The treatment performed significantly worse than control."
             )
-        elif significant and benefit > 2:
+        elif significant and (benefit is None or benefit > 2):
             interpretation += (
                 "**✅ RECOMMEND:** Implement the treatment. The results show a statistically "
                 "significant and practically meaningful improvement."
