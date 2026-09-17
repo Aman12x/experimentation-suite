@@ -1,19 +1,57 @@
 """
 Report Generator
-Exports experiment results to various formats (PDF, Excel, HTML)
+Exports experiment results to Excel, Markdown, and HTML
 """
 
+import html as html_lib
+import re
 import pandas as pd
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime
 import io
+
+
+def _scalar_items(results: Dict):
+    """Result entries that fit in a two-column table"""
+    for key, value in results.items():
+        if isinstance(value, (int, float, str, bool)):
+            yield key, value
+
+
+def _markdown_to_html(text: str) -> str:
+    """Convert the small Markdown subset the interpreters emit (headings, bold, bullets)"""
+    blocks = []
+    for block in html_lib.escape(text, quote=False).split('\n\n'):
+        block = block.strip()
+        if not block:
+            continue
+        block = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', block)
+        heading = re.match(r'^(#{2,4})\s+(.*)$', block)
+        if heading:
+            level = len(heading.group(1))
+            blocks.append(f"<h{level}>{heading.group(2)}</h{level}>")
+        elif all(line.startswith('- ') for line in block.split('\n')):
+            items = ''.join(f"<li>{line[2:]}</li>" for line in block.split('\n'))
+            blocks.append(f"<ul>{items}</ul>")
+        else:
+            blocks.append(f"<p>{block.replace(chr(10), '<br>')}</p>")
+    return '\n'.join(blocks)
+
+
+def _decision_markdown(decision: Optional[Dict]) -> str:
+    if not decision:
+        return ""
+    reasons = '\n'.join(f"- {r}" for r in decision['reasons'])
+    return f"## 🚦 Decision: {decision['decision']}\n\n{reasons}\n\n"
 
 
 class ReportGenerator:
     """Generates exportable reports from experiment results"""
     
-    def __init__(self):
-        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    @property
+    def timestamp(self) -> str:
+        """Fresh on every export, so file names do not repeat within a session"""
+        return datetime.now().strftime("%Y%m%d_%H%M%S")
     
     def create_excel_report(
         self,
@@ -41,13 +79,25 @@ class ReportGenerator:
                 'Value': []
             }
             
-            for key, value in results.items():
-                if isinstance(value, (int, float, str, bool)):
-                    summary_data['Metric'].append(key)
-                    summary_data['Value'].append(value)
+            summary_data['Metric'].append('test_type')
+            summary_data['Value'].append(test_type)
+            for key, value in _scalar_items(results):
+                if key == 'test_type':
+                    continue
+                summary_data['Metric'].append(key)
+                summary_data['Value'].append(value)
             
             summary_df = pd.DataFrame(summary_data)
             summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            
+            # Tabular results (balance table, event-study coefficients, per-variant comparisons)
+            for key, value in results.items():
+                if key in ('matched_treated', 'matched_control'):
+                    continue
+                if isinstance(value, list) and value and isinstance(value[0], dict):
+                    value = pd.DataFrame([dict(_scalar_items(row)) for row in value])
+                if isinstance(value, pd.DataFrame):
+                    value.to_excel(writer, sheet_name=key[:31], index=False)
             
             # Data sheet
             data.to_excel(writer, sheet_name='Raw Data', index=False)
@@ -62,11 +112,11 @@ class ReportGenerator:
             })
             
             for sheet_name in writer.sheets:
-                worksheet = writer.sheets[sheet_name]
-                worksheet.set_column('A:Z', 15)
-                
-                for col_num, value in enumerate(summary_df.columns.values):
-                    worksheet.write(0, col_num, value, header_format)
+                writer.sheets[sheet_name].set_column('A:Z', 18)
+            
+            # Only the summary sheet has the Metric / Value header
+            for col_num, value in enumerate(summary_df.columns.values):
+                writer.sheets['Summary'].write(0, col_num, value, header_format)
         
         output.seek(0)
         return output
@@ -75,7 +125,8 @@ class ReportGenerator:
         self,
         results: Dict,
         interpretation: str,
-        test_type: str
+        test_type: str,
+        decision: Optional[Dict] = None
     ) -> str:
         """
         Create Markdown report
@@ -93,17 +144,16 @@ class ReportGenerator:
         report += f"**Test Type:** {test_type}\n\n"
         report += "---\n\n"
         
+        report += _decision_markdown(decision)
+        
         # Add interpretation
         report += interpretation + "\n\n"
         
         # Add detailed results
         report += "## Detailed Results\n\n"
         report += "```\n"
-        for key, value in results.items():
-            if isinstance(value, (int, float)):
-                report += f"{key}: {value}\n"
-            elif isinstance(value, str):
-                report += f"{key}: {value}\n"
+        for key, value in _scalar_items(results):
+            report += f"{key}: {value}\n"
         report += "```\n\n"
         
         report += "---\n\n"
@@ -116,7 +166,8 @@ class ReportGenerator:
         results: Dict,
         interpretation: str,
         test_type: str,
-        include_charts: bool = True
+        include_charts: bool = True,
+        decision: Optional[Dict] = None
     ) -> str:
         """
         Create HTML report
@@ -206,7 +257,7 @@ class ReportGenerator:
         <body>
             <div class="header">
                 <h1>Experiment Analysis Report</h1>
-                <p><strong>Test Type:</strong> {test_type}</p>
+                <p><strong>Test Type:</strong> {html_lib.escape(str(test_type))}</p>
                 <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
             </div>
             
@@ -247,12 +298,7 @@ class ReportGenerator:
                 <div class="interpretation">
         """
         
-        # Convert markdown interpretation to HTML (simple conversion)
-        html_interpretation = interpretation.replace('\n\n', '</p><p>')
-        html_interpretation = html_interpretation.replace('###', '<h3>').replace('##', '<h2>')
-        html_interpretation = html_interpretation.replace('**', '<strong>').replace('**', '</strong>')
-        
-        html += f"<p>{html_interpretation}</p>"
+        html += _markdown_to_html(_decision_markdown(decision) + interpretation)
         
         html += """
                 </div>
@@ -270,14 +316,13 @@ class ReportGenerator:
                     <tbody>
         """
         
-        for key, value in results.items():
-            if isinstance(value, (int, float, str, bool)):
-                html += f"""
+        for key, value in _scalar_items(results):
+            html += f"""
                         <tr>
-                            <td>{key}</td>
-                            <td>{value}</td>
+                            <td>{html_lib.escape(str(key))}</td>
+                            <td>{html_lib.escape(str(value))}</td>
                         </tr>
-                """
+            """
         
         html += """
                     </tbody>
@@ -306,13 +351,6 @@ class ReportGenerator:
         Returns:
             DataFrame with summary
         """
-        summary_data = []
-        
-        for key, value in results.items():
-            if isinstance(value, (int, float, str, bool)):
-                summary_data.append({
-                    'Metric': key,
-                    'Value': value
-                })
-        
-        return pd.DataFrame(summary_data)
+        return pd.DataFrame(
+            [{'Metric': key, 'Value': value} for key, value in _scalar_items(results)]
+        )

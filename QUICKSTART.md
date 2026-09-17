@@ -1,137 +1,57 @@
-# 🚀 Quick Start Guide
+# 🚀 Quick Start
 
-## Installation (5 minutes)
+## Install and launch
 
-1. **Extract the files** to a directory of your choice
-
-2. **Open terminal/command prompt** in that directory
-
-3. **Install dependencies**:
 ```bash
 pip install -r requirements.txt
-```
-
-4. **Launch the app**:
-```bash
 streamlit run app.py
 ```
 
-5. **Open browser** to http://localhost:8501
+Open http://localhost:8501.
 
-## First Analysis (2 minutes)
+## First analysis: a three-arm test with a guardrail
 
-### Try the Sample A/B Test Data
+1. In the sidebar, under **Or try a sample dataset**, pick **Multi-variant checkout test (CUPED, guardrails)**.
+2. Open the **🧪 A/B Testing** tab. `variant` and `control` are selected for you.
+3. Set **Metric Column** to `revenue`.
+4. Under **Guardrail Metrics**, add `page_load_ms`, and add it again under **Metrics Where Lower Is Better**.
+5. Click **🚀 Run A/B Test**.
 
-1. **Upload Data**:
-   - Click "Browse files" in the sidebar
-   - Select `sample_ab_test_data.csv`
-   - Wait for "✅ Loaded" message
+What to look for:
+- **Health checks** run first. A sample ratio mismatch would invalidate everything below it.
+- **All Variants vs Control** shows raw and Holm-corrected p-values side by side.
+- **Decision** reads `DO NOT SHIP` for `express_pay`: it lifts revenue but slows pages.
 
-2. **Run A/B Test**:
-   - Go to "🧪 A/B Testing" tab
-   - Select:
-     - Group Column: `group`
-     - Metric Column: `revenue`
-     - Test Type: `T-Test`
-   - Click "🚀 Run A/B Test"
+## See CUPED tighten an interval
 
-3. **Review Results**:
-   - Check health diagnostics (should pass ✅)
-   - Read the business interpretation
-   - Explore interactive charts
-   - Note the ~11% revenue lift
+Same dataset. Untick **Compare all variants against control**, set **Treatment Group** to `one_page_checkout`, **Test Type** to **CUPED (variance reduction)**, and **Pre-Experiment Covariate** to `pre_revenue`. The plain t-test on this arm is not significant; with CUPED it is.
 
-### Try Difference-in-Differences
+## Difference-in-differences with a pre-trend test
 
-1. **Upload** `sample_did_data.csv`
+1. Pick the **Difference-in-differences (store sales)** sample.
+2. **🎯 Causal Inference** tab, method **Difference-in-Differences (DiD)**.
+3. Group `region`, time `period`, outcome `sales`, treatment group `treatment`, post period `post`.
+4. **Cluster Standard Errors By**: `store_id`.
+5. **Time Index Columns for Pre-Trend Test**: `year`, then `quarter`. First treated period defaults to `2024 / 1`.
+6. Click **🚀 Run DiD Analysis**.
 
-2. **Go to** "🎯 Causal Inference" tab
+The event-study chart should show pre-treatment gaps around zero and a jump at treatment.
 
-3. **Select** "Difference-in-Differences (DiD)"
+## Your own data
 
-4. **Configure**:
-   - Group Column: `region`
-   - Time Period Column: `period`
-   - Outcome Column: `sales`
-   - Treatment Group: `treatment`
-   - Post-Treatment Period: `post`
+Upload a CSV or Parquet file with one row per unit. A/B tests need a group column and a numeric metric. Tests marked for binary metrics (Proportions, Chi-Squared, Bayesian) need a 0/1 column.
 
-5. **Click** "🚀 Run DiD Analysis"
+## Reading the results
 
-6. **Observe** the ~200 unit treatment effect with parallel trends visualization
+| Term | Meaning |
+|---|---|
+| p-value | If there were no real difference, how often a result this extreme would appear |
+| Relative lift CI | Range of plausible lifts. If it includes 0, direction is not settled |
+| SRM | Traffic split differs from plan. Assignment or logging is broken; do not trust the result |
+| Always-valid p-value | Safe to check at any time; a normal p-value is only valid if you look once |
+| Adjusted p-value | Corrected for having tested several variants |
 
-## Key Features to Explore
+## Troubleshooting
 
-### 📏 Power Analysis
-In the A/B Testing tab:
-- Scroll to "Sample Size Calculator"
-- Enter expected parameters
-- Get sample size recommendations
-
-### 🎯 Propensity Score Matching
-In Causal Inference tab:
-- Select PSM method
-- Choose treatment, outcome, and covariates
-- Review balance diagnostics
-
-### 📄 Export Reports
-In Report Export tab:
-- Choose your analysis results
-- Select format (Excel/Markdown/HTML)
-- Download professional report
-
-## Understanding Results
-
-### Statistical Significance
-- **p < 0.05**: Strong evidence of real effect
-- **p ≥ 0.05**: Insufficient evidence, could be chance
-
-### Effect Size (Cohen's d)
-- **< 0.2**: Negligible
-- **0.2-0.5**: Small
-- **0.5-0.8**: Medium
-- **> 0.8**: Large
-
-### Sample Ratio Mismatch
-- **OK**: Traffic split as expected
-- **CRITICAL**: Data quality issue - investigate!
-
-### Confidence Intervals
-- **Excludes 0**: Confident in direction of effect
-- **Includes 0**: Effect could be positive, negative, or none
-
-## Common Issues
-
-### "Module not found" error
-```bash
-pip install --upgrade -r requirements.txt
-```
-
-### Port already in use
-```bash
-streamlit run app.py --server.port 8502
-```
-
-### Charts not displaying
-- Ensure you have a modern browser (Chrome, Firefox, Edge)
-- Check JavaScript is enabled
-
-## Next Steps
-
-1. **Upload your own data** (CSV or Parquet)
-2. **Experiment with different tests** and parameters
-3. **Compare results** across methods
-4. **Export reports** for stakeholders
-5. **Read README.md** for detailed documentation
-
-## Tips for Success
-
-✅ **Always check health diagnostics** before interpreting results
-✅ **Use power analysis** to plan experiments
-✅ **Consider practical significance** not just statistical
-✅ **Document assumptions** in your reports
-✅ **Validate with multiple methods** when possible
-
----
-
-**Need help?** Check the "ℹ️ Quick Help" section in the sidebar or review README.md for comprehensive documentation.
+- **Module not found**: `pip install --upgrade -r requirements.txt`
+- **Port in use**: `streamlit run app.py --server.port 8502`

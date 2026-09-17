@@ -153,3 +153,15 @@ def test_results_are_json_native(engine):
         engine.calculate_sample_size(100, 5, 20),
     ):
         json.dumps(results, allow_nan=False)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("method", ["t_test", "z_test", "mann_whitney_test", "bootstrap_test", "sequential_test"])
+def test_missing_values_are_rejected_not_silently_scored(engine, method):
+    """A NaN used to flow through to p=1.0, 'not significant'"""
+    rng = np.random.default_rng(6)
+    control = rng.normal(0, 1, 200)
+    treatment = rng.normal(1, 1, 200)
+    treatment[3] = np.nan
+    with pytest.raises(ValueError, match="missing values"):
+        getattr(engine, method)(control, treatment)

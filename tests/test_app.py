@@ -183,3 +183,16 @@ def test_iv_runs_and_reports_interpretation():
     assert not at.exception
     assert not at.error
     assert "IV Estimate" in metrics(at)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("export_format", ["Excel", "Markdown", "HTML"])
+def test_export_after_ab_test(export_format):
+    at = load_app("A/B test (revenue, conversion)")
+    select(at, "Metric Column", "revenue").run()
+    at = click(at, "Run A/B Test")
+    
+    next(r for r in at.radio if r.label == "Export Format").set_value(export_format).run()
+    at = click(at, "Generate Export")
+    assert not at.exception
+    assert not at.error

@@ -17,6 +17,16 @@ def is_binary_metric(values: Sequence) -> bool:
     return len(unique) > 0 and unique <= {0.0, 1.0}
 
 
+def as_clean_array(values: Sequence, name: str) -> np.ndarray:
+    """Float array with no missing values; NaNs would otherwise turn into a silent p=1"""
+    array = np.asarray(values, dtype=float)
+    if np.isnan(array).any():
+        raise ValueError(
+            f"{name} contains {int(np.isnan(array).sum())} missing values. Drop or impute them first."
+        )
+    return array
+
+
 def relative_lift_interval(
     control_mean: float,
     treatment_mean: float,
@@ -147,10 +157,10 @@ class AdvancedABMethods:
             treatment_covariate: Pre-experiment covariate for treatment users
             alpha: Significance level
         """
-        control = np.asarray(control, dtype=float)
-        treatment = np.asarray(treatment, dtype=float)
-        x_c = np.asarray(control_covariate, dtype=float)
-        x_t = np.asarray(treatment_covariate, dtype=float)
+        control = as_clean_array(control, 'control')
+        treatment = as_clean_array(treatment, 'treatment')
+        x_c = as_clean_array(control_covariate, 'control_covariate')
+        x_t = as_clean_array(treatment_covariate, 'treatment_covariate')
         if len(control) != len(x_c) or len(treatment) != len(x_t):
             raise ValueError("Each covariate must line up one-to-one with its group's metric")
 
@@ -205,8 +215,8 @@ class AdvancedABMethods:
         Tests whether a random treatment user tends to have a higher value than
         a random control user. It does not test the difference in means.
         """
-        control = np.asarray(control, dtype=float)
-        treatment = np.asarray(treatment, dtype=float)
+        control = as_clean_array(control, 'control')
+        treatment = as_clean_array(treatment, 'treatment')
         if len(control) == 0 or len(treatment) == 0:
             raise ValueError("Both groups need at least one observation")
 
@@ -245,8 +255,8 @@ class AdvancedABMethods:
         Makes no distributional assumption, which suits revenue-style metrics
         where a few large values dominate.
         """
-        control = np.asarray(control, dtype=float)
-        treatment = np.asarray(treatment, dtype=float)
+        control = as_clean_array(control, 'control')
+        treatment = as_clean_array(treatment, 'treatment')
         if len(control) < 2 or len(treatment) < 2:
             raise ValueError("Bootstrap needs at least two observations per group")
 
@@ -377,8 +387,8 @@ class AdvancedABMethods:
             n_looks: Number of interim looks
             min_per_group: Observations per group before the first look
         """
-        control = np.asarray(control, dtype=float)
-        treatment = np.asarray(treatment, dtype=float)
+        control = as_clean_array(control, 'control')
+        treatment = as_clean_array(treatment, 'treatment')
         if min(len(control), len(treatment)) < max(min_per_group, 2):
             raise ValueError(f"Need at least {max(min_per_group, 2)} observations per group")
 
@@ -447,7 +457,7 @@ class AdvancedABMethods:
                 if stopped_at else None
             ),
             'naive_peeking_would_stop_at_look': next(
-                (i + 1 for i, l in enumerate(looks) if l['fixed_horizon_p_value'] < alpha), None
+                (i + 1 for i, look in enumerate(looks) if look['fixed_horizon_p_value'] < alpha), None
             ),
             'tau': float(tau),
             'looks': looks,
