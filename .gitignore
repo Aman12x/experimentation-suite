@@ -1,4 +1,9 @@
 pycache 
 PyCache
 __pycache__
-venv.DS_Store
+venv
+.DS_Store
+.coverage
+htmlcov/
+.venv/
+.pytest_cache/

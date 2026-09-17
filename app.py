@@ -3,6 +3,8 @@ Experimentation & Causal Analysis Suite
 Main Streamlit Application
 """
 
+from pathlib import Path
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -101,9 +103,28 @@ with st.sidebar:
         help="Upload your experiment data to begin analysis"
     )
     
-    if uploaded_file:
+    SAMPLE_DATASETS = {
+        "A/B test (revenue, conversion)": "sample_ab_test_data.csv",
+        "E-commerce A/B test (funnel)": "ecommerce_ab_test.csv",
+        "Difference-in-differences (store sales)": "sample_did_data.csv",
+    }
+    sample_choice = st.selectbox(
+        "Or try a sample dataset",
+        options=["(none)"] + list(SAMPLE_DATASETS),
+        help="Bundled datasets so you can explore without uploading anything"
+    )
+    sample_path = (
+        Path(__file__).parent / "data" / SAMPLE_DATASETS[sample_choice]
+        if sample_choice != "(none)" else None
+    )
+    has_data = bool(uploaded_file or sample_path)
+    
+    if has_data:
         try:
-            data = st.session_state.data_handler.load_data(uploaded_file)
+            if uploaded_file:
+                data = st.session_state.data_handler.load_data(uploaded_file)
+            else:
+                data = st.session_state.data_handler.load_path(sample_path)
             st.success(f"✅ Loaded {len(data):,} rows × {len(data.columns)} columns")
             
             st.subheader("📊 Data Info")
@@ -131,7 +152,7 @@ with st.sidebar:
         """)
 
 # Main content - Tabs
-if uploaded_file:
+if has_data:
     tab1, tab2, tab3, tab4 = st.tabs([
         "📊 Data Overview",
         "🧪 A/B Testing",
@@ -194,6 +215,39 @@ if uploaded_file:
                     help="Statistical test to perform"
                 )
             
+            cfg_col1, cfg_col2 = st.columns(2)
+            
+            with cfg_col1:
+                group_values = (
+                    st.session_state.data_handler.data[group_col].dropna().unique().tolist()
+                    if group_col else []
+                )
+                default_control = next(
+                    (i for i, g in enumerate(group_values)
+                     if str(g).lower() in ('control', 'ctrl', 'baseline', 'a')),
+                    0
+                )
+                control_group = st.selectbox(
+                    "Control Group",
+                    options=group_values,
+                    index=default_control,
+                    help="Which value of the group column is the control"
+                )
+            
+            with cfg_col2:
+                treatment_options = [g for g in group_values if g != control_group]
+                treatment_group = st.selectbox(
+                    "Treatment Group",
+                    options=treatment_options,
+                    help="Which value of the group column is the treatment"
+                )
+            
+            assume_equal_var = st.checkbox(
+                "Assume equal variances (Student's t-test)",
+                value=False,
+                help="Off = Welch's t-test, which stays valid when variances or group sizes differ"
+            )
+            
             alpha = st.slider(
                 "Significance Level (α)",
                 min_value=0.01,
@@ -213,12 +267,21 @@ if uploaded_file:
             
             if not is_valid:
                 st.error(f"❌ Validation Error: {msg}")
+            elif treatment_group is None:
+                st.error("❌ Validation Error: pick a treatment group different from control")
             else:
                 with st.spinner("Running analysis..."):
                     # Prepare data
                     df = st.session_state.data_handler.prepare_ab_data(
                         group_col, metric_col
                     )
+                    n_groups = df[group_col].nunique()
+                    df = df[df[group_col].isin([control_group, treatment_group])]
+                    if n_groups > 2:
+                        st.info(
+                            f"ℹ️ {n_groups} groups found. Comparing **{treatment_group}** "
+                            f"against **{control_group}** only."
+                        )
                     
                     # Run health checks
                     st.subheader("🏥 Health Checks")
@@ -239,18 +302,14 @@ if uploaded_file:
                     
                     st.divider()
                     
-                    # Get groups
-                    groups = df[group_col].unique()
-                    control_group = groups[0]
-                    treatment_group = groups[1]
-                    
                     control_data = df[df[group_col] == control_group][metric_col].values
                     treatment_data = df[df[group_col] == treatment_group][metric_col].values
                     
                     # Run test based on type
                     if test_type == 'T-Test':
                         results = st.session_state.ab_engine.t_test(
-                            control_data, treatment_data, alpha=alpha
+                            control_data, treatment_data, alpha=alpha,
+                            equal_var=assume_equal_var
                         )
                     elif test_type == 'Z-Test':
                         results = st.session_state.ab_engine.z_test(
@@ -412,9 +471,13 @@ if uploaded_file:
                 power_alpha = st.slider("Significance Level", 0.01, 0.10, 0.05, 0.01)
             
             if st.button("Calculate Sample Size"):
-                power_results = st.session_state.ab_engine.calculate_sample_size(
-                    baseline_mean, mde, baseline_std, power_alpha, power
-                )
+                try:
+                    power_results = st.session_state.ab_engine.calculate_sample_size(
+                        baseline_mean, mde, baseline_std, power_alpha, power
+                    )
+                except Exception as e:
+                    st.error(f"Error calculating sample size: {str(e)}")
+                    power_results = {}
                 
                 if power_results:
                     st.success(f"✅ Total sample size needed: **{power_results['total_sample_size']:,}**")
@@ -445,8 +508,18 @@ if uploaded_file:
                 with col1:
                     treatment_col = st.selectbox(
                         "Treatment Column",
-                        options=st.session_state.data_handler.categorical_columns,
-                        help="Binary treatment indicator"
+                        options=st.session_state.data_handler.binary_columns(),
+                        help="Column with exactly two values (treated vs not treated)"
+                    )
+                    treated_value = st.selectbox(
+                        "Treated Value",
+                        options=(
+                            sorted(
+                                st.session_state.data_handler.data[treatment_col].dropna().unique().tolist(),
+                                key=lambda v: str(v).lower() not in ('1', 'true', 'treatment', 'treated')
+                            ) if treatment_col else []
+                        ),
+                        help="Which value marks the treated group"
                     )
                 
                 with col2:
@@ -465,7 +538,10 @@ if uploaded_file:
                 
                 covariate_cols = st.multiselect(
                     "Covariate Columns (for matching)",
-                    options=st.session_state.data_handler.numeric_columns,
+                    options=[
+                        c for c in st.session_state.data_handler.numeric_columns
+                        if c not in (treatment_col, outcome_col)
+                    ],
                     help="Variables to control for in matching"
                 )
             
@@ -474,13 +550,17 @@ if uploaded_file:
                     st.error("❌ Please select at least one covariate for matching")
                 else:
                     with st.spinner("Running Propensity Score Matching..."):
-                        psm_results = st.session_state.causal_lab.propensity_score_matching(
-                            st.session_state.data_handler.data,
-                            treatment_col,
-                            outcome_col,
-                            covariate_cols,
-                            caliper=caliper
-                        )
+                        try:
+                            psm_results = st.session_state.causal_lab.propensity_score_matching(
+                                st.session_state.data_handler.data,
+                                treatment_col,
+                                outcome_col,
+                                covariate_cols,
+                                caliper=caliper,
+                                treated_value=treated_value
+                            )
+                        except Exception as e:
+                            psm_results = {'error': str(e)}
                         
                         if 'error' in psm_results:
                             st.error(f"❌ {psm_results['error']}")
@@ -568,7 +648,7 @@ if uploaded_file:
                     
                     # Get unique values for selection
                     if group_col_did and time_col:
-                        treatment_group = st.selectbox(
+                        did_treatment_group = st.selectbox(
                             "Treatment Group Value",
                             options=st.session_state.data_handler.data[group_col_did].unique()
                         )
@@ -577,17 +657,31 @@ if uploaded_file:
                             "Post-Treatment Period Value",
                             options=st.session_state.data_handler.data[time_col].unique()
                         )
+                
+                cluster_choice = st.selectbox(
+                    "Cluster Standard Errors By (Optional)",
+                    options=['(none)'] + [
+                        c for c in st.session_state.data_handler.data.columns
+                        if c not in (group_col_did, time_col, outcome_col_did)
+                    ],
+                    help="Unit observed repeatedly, e.g. store_id or user_id"
+                )
             
             if st.button("🚀 Run DiD Analysis", type="primary"):
                 with st.spinner("Running Difference-in-Differences..."):
-                    did_results = st.session_state.causal_lab.difference_in_differences(
-                        st.session_state.data_handler.data,
-                        group_col_did,
-                        time_col,
-                        outcome_col_did,
-                        treatment_group,
-                        post_period
-                    )
+                    try:
+                        did_results = st.session_state.causal_lab.difference_in_differences(
+                            st.session_state.data_handler.data,
+                            group_col_did,
+                            time_col,
+                            outcome_col_did,
+                            did_treatment_group,
+                            post_period,
+                            cluster_col=None if cluster_choice == '(none)' else cluster_choice
+                        )
+                    except Exception as e:
+                        st.error(f"❌ {str(e)}")
+                        st.stop()
                     
                     # Display results
                     st.subheader("📊 DiD Results")
@@ -611,7 +705,7 @@ if uploaded_file:
                     st.markdown(did_interp)
                     
                     # Parallel trends plot
-                    st.subheader("📈 Parallel Trends")
+                    st.subheader("📈 Group Means Before and After")
                     fig_trends = st.session_state.visualizer.plot_did_trends(
                         did_results['group_time_means']
                     )
@@ -659,13 +753,17 @@ if uploaded_file:
             
             if st.button("🚀 Run IV Analysis", type="primary"):
                 with st.spinner("Running Instrumental Variables estimation..."):
-                    iv_results = st.session_state.causal_lab.instrumental_variables(
-                        st.session_state.data_handler.data,
-                        outcome_col_iv,
-                        treatment_col_iv,
-                        instrument_col,
-                        covariate_cols_iv if covariate_cols_iv else None
-                    )
+                    try:
+                        iv_results = st.session_state.causal_lab.instrumental_variables(
+                            st.session_state.data_handler.data,
+                            outcome_col_iv,
+                            treatment_col_iv,
+                            instrument_col,
+                            covariate_cols_iv if covariate_cols_iv else None
+                        )
+                    except Exception as e:
+                        st.error(f"❌ {str(e)}")
+                        iv_results = {}
                     
                     if iv_results:
                         st.subheader("📊 IV Results")
@@ -685,11 +783,10 @@ if uploaded_file:
                             weak = "⚠️ Weak" if iv_results['weak_instrument'] else "✅ Strong"
                             st.metric("Instrument Strength", weak)
                         
-                        if iv_results['weak_instrument']:
-                            st.warning(
-                                "⚠️ **Weak Instrument Warning:** First-stage F-statistic < 10 suggests "
-                                "the instrument may be weak. Consider finding a stronger instrument."
-                            )
+                        st.subheader("💡 Causal Interpretation")
+                        st.markdown(
+                            st.session_state.interpreter.interpret_causal_effect(iv_results, "IV")
+                        )
                         
                         st.session_state.iv_results = iv_results
     
@@ -794,7 +891,7 @@ if uploaded_file:
 
 else:
     # Welcome screen when no data uploaded
-    st.info("👈 Please upload a dataset using the sidebar to begin your analysis")
+    st.info("👈 Upload a dataset or pick a sample dataset in the sidebar to begin your analysis")
     
     col1, col2, col3 = st.columns(3)
     

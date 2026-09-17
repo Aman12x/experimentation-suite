@@ -6,7 +6,6 @@ Handles data loading, validation, and preprocessing
 import pandas as pd
 import numpy as np
 from typing import Optional, Tuple, List
-import streamlit as st
 
 
 class DataHandler:
@@ -27,20 +26,28 @@ class DataHandler:
         Returns:
             pd.DataFrame: Loaded dataframe
         """
-        try:
-            if uploaded_file.name.endswith('.csv'):
-                self.data = pd.read_csv(uploaded_file)
-            elif uploaded_file.name.endswith('.parquet'):
-                self.data = pd.read_parquet(uploaded_file)
-            else:
-                raise ValueError("Unsupported file format. Please upload CSV or Parquet.")
-            
-            self._identify_column_types()
-            return self.data
-            
-        except Exception as e:
-            st.error(f"Error loading data: {str(e)}")
-            raise
+        if uploaded_file.name.endswith('.csv'):
+            self.data = pd.read_csv(uploaded_file)
+        elif uploaded_file.name.endswith('.parquet'):
+            self.data = pd.read_parquet(uploaded_file)
+        else:
+            raise ValueError("Unsupported file format. Please upload CSV or Parquet.")
+        
+        self._identify_column_types()
+        return self.data
+    
+    def load_path(self, path) -> pd.DataFrame:
+        """Load data from a CSV or Parquet file on disk"""
+        path = str(path)
+        if path.endswith('.csv'):
+            self.data = pd.read_csv(path)
+        elif path.endswith('.parquet'):
+            self.data = pd.read_parquet(path)
+        else:
+            raise ValueError("Unsupported file format. Please use CSV or Parquet.")
+        
+        self._identify_column_types()
+        return self.data
     
     def _identify_column_types(self):
         """Identify numeric and categorical columns"""
@@ -51,6 +58,12 @@ class DataHandler:
             self.categorical_columns = self.data.select_dtypes(
                 include=['object', 'category', 'bool']
             ).columns.tolist()
+    
+    def binary_columns(self) -> List[str]:
+        """Columns with exactly two distinct values (usable as a treatment indicator)"""
+        if self.data is None:
+            return []
+        return [c for c in self.data.columns if self.data[c].nunique(dropna=True) == 2]
     
     def get_summary_stats(self) -> pd.DataFrame:
         """Get summary statistics for the dataset"""
