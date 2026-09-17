@@ -22,6 +22,8 @@ A Welch t-test needs three numbers per arm: `n`, `mean`, `variance`. CUPED and r
 - Privacy: no user-level row reaches the agent or this server.
 - Exactness: the from-stats results equal the row-level results. `tests/test_from_stats_and_sql.py` runs the generated SQL on DuckDB and requires agreement to 1e-9 with the row-level analysis of the same file, including the collapse to one row per user and the removal of users seen in more than one arm.
 
+- Checked on a real warehouse: on 17 Sep 2026 the BigQuery-dialect SQL for all four analyses (mean with unit collapse, CUPED, ratio, proportion) and the date-window filter was run in BigQuery against the sample table. Every result matched the row-level analysis of the same file, with a worst relative gap of 2e-12. BigQuery returns numbers as JSON strings; `rows_to_arms` converts them.
+
 Bootstrap, Mann-Whitney and sequential tests need the values themselves. `analyze_rows` offers them for up to 50,000 values per arm.
 
 ## Tools
