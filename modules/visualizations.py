@@ -343,16 +343,16 @@ class Visualizer:
             Plotly figure
         """
         looks = results['looks']
-        n = [l['n_control'] + l['n_treatment'] for l in looks]
+        n = [look['n_control'] + look['n_treatment'] for look in looks]
         
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=n, y=[l['always_valid_p_value'] for l in looks],
+            x=n, y=[look['always_valid_p_value'] for look in looks],
             mode='lines+markers', name='Always-valid p-value',
             line=dict(width=3, color=self.color_palette['treatment'])
         ))
         fig.add_trace(go.Scatter(
-            x=n, y=[l['fixed_horizon_p_value'] for l in looks],
+            x=n, y=[look['fixed_horizon_p_value'] for look in looks],
             mode='lines+markers', name='Fixed-horizon p-value (unsafe to peek at)',
             line=dict(width=2, dash='dot', color=self.color_palette['neutral'])
         ))

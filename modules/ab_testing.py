@@ -10,7 +10,7 @@ from statsmodels.stats.power import tt_ind_solve_power, zt_ind_solve_power
 from statsmodels.stats.proportion import proportions_ztest, proportion_effectsize
 from typing import Dict, Tuple, Optional, List
 
-from .ab_advanced import AdvancedABMethods, relative_lift_interval
+from .ab_advanced import AdvancedABMethods, as_clean_array, relative_lift_interval
 
 
 class ABTestingEngine(AdvancedABMethods):
@@ -43,8 +43,8 @@ class ABTestingEngine(AdvancedABMethods):
         Returns:
             Dictionary with test results
         """
-        control = np.asarray(control, dtype=float)
-        treatment = np.asarray(treatment, dtype=float)
+        control = as_clean_array(control, 'control')
+        treatment = as_clean_array(treatment, 'treatment')
         if len(control) == 0 or len(treatment) == 0:
             raise ValueError("Both groups need at least one observation")
         if alternative not in ('two-sided', 'greater', 'less'):
@@ -138,8 +138,8 @@ class ABTestingEngine(AdvancedABMethods):
         Returns:
             Dictionary with test results
         """
-        control = np.asarray(control, dtype=float)
-        treatment = np.asarray(treatment, dtype=float)
+        control = as_clean_array(control, 'control')
+        treatment = as_clean_array(treatment, 'treatment')
         if len(control) < 2 or len(treatment) < 2:
             raise ValueError("Z-test needs at least two observations per group")
         if alternative not in ('two-sided', 'greater', 'less'):

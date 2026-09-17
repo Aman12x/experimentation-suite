@@ -16,12 +16,13 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+        cache: pip
     
     - name: Install dependencies
       run: |
@@ -31,7 +32,10 @@ jobs:
     
     - name: Run tests with pytest
       run: |
-        pytest tests/ -v --cov=modules --cov=utils --cov-report=term
+        pytest tests/ -v --cov=modules --cov=utils --cov-report=term --cov-fail-under=80
+    
+    - name: Run the demo end to end
+      run: python demo.py
     
     - name: Lint with flake8
       run: |

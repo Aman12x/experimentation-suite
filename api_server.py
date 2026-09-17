@@ -3,14 +3,13 @@ FastAPI REST API Server for Experimentation Suite
 Provides RESTful endpoints for statistical testing and causal inference
 """
 
-from fastapi import FastAPI, HTTPException, File, UploadFile
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Literal, Optional, Dict, Any
 import numpy as np
 import pandas as pd
-from io import BytesIO
 import logging
 
 # Make the local packages importable when run as a script
@@ -35,7 +34,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,  # no cookies or auth here, and browsers reject "*" with credentials
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -125,16 +124,150 @@ class PowerAnalysisRequest(BaseModel):
 
 class HealthCheckRequest(BaseModel):
     """Request model for health checks"""
-    group: List[str] = Field(..., description="Group assignments")
-    metric: List[float] = Field(..., description="Metric values")
-    expected_ratio: List[float] = Field([0.5, 0.5], description="Expected group proportions")
+    group: List[str] = Field(..., description="Group assignment per observation", min_length=2)
+    metric: List[float] = Field(..., description="Metric value per observation", min_length=2)
+    expected_ratio: Optional[Dict[str, float]] = Field(
+        None, description="Expected traffic share per group label. Defaults to an equal split."
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "group": ["control", "control", "treatment", "treatment"],
+                "metric": [10.0, 12.0, 11.0, 13.0],
+                "expected_ratio": {"control": 0.5, "treatment": 0.5}
+            }
+        }
+
+
+class ProportionsRequest(BaseModel):
+    """Request model for the two-proportion z-test"""
+    control_success: int = Field(..., ge=0)
+    control_total: int = Field(..., gt=0)
+    treatment_success: int = Field(..., ge=0)
+    treatment_total: int = Field(..., gt=0)
+    alpha: float = Field(0.05, ge=0.01, le=0.10)
+    alternative: Literal["two-sided", "greater", "less"] = Field("two-sided")
+
+
+class TwoSampleRequest(BaseModel):
+    """Request model for Mann-Whitney U and bootstrap tests"""
+    control: List[float] = Field(..., min_length=2)
+    treatment: List[float] = Field(..., min_length=2)
+    alpha: float = Field(0.05, ge=0.01, le=0.10)
+
+
+class CupedRequest(BaseModel):
+    """Request model for CUPED variance reduction"""
+    control: List[float] = Field(..., min_length=2)
+    treatment: List[float] = Field(..., min_length=2)
+    control_covariate: List[float] = Field(..., description="Pre-experiment covariate, aligned with control")
+    treatment_covariate: List[float] = Field(..., description="Pre-experiment covariate, aligned with treatment")
+    alpha: float = Field(0.05, ge=0.01, le=0.10)
+
+
+class MultiVariantRequest(BaseModel):
+    """Request model for multi-variant comparison"""
+    groups: Dict[str, List[float]] = Field(..., description="Metric values per group label, control included")
+    control_label: str = Field(..., description="Which label is the control")
+    alpha: float = Field(0.05, ge=0.01, le=0.10)
+    correction: Literal["holm", "bonferroni", "fdr_bh", "none"] = Field("holm")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "groups": {"control": [10, 11, 9, 10], "a": [11, 12, 10, 12], "b": [13, 14, 12, 13]},
+                "control_label": "control",
+                "correction": "holm"
+            }
+        }
+
+
+class SequentialRequest(BaseModel):
+    """Request model for the always-valid sequential test"""
+    control: List[float] = Field(..., description="Control observations in arrival order")
+    treatment: List[float] = Field(..., description="Treatment observations in arrival order")
+    alpha: float = Field(0.05, ge=0.01, le=0.10)
+    n_looks: int = Field(20, ge=1, le=200)
+    tau: Optional[float] = Field(None, gt=0, description="Mixing prior std dev; defaults to 10% of pooled std")
+
+
+class PSMRequest(BaseModel):
+    """Request model for propensity score matching"""
+    data: List[Dict[str, Any]] = Field(..., description="Rows as records", min_length=4)
+    treatment_col: str
+    outcome_col: str
+    covariate_cols: List[str] = Field(..., min_length=1)
+    treated_value: Optional[Any] = Field(None, description="Label marking the treated group if the column is not 0/1")
+    caliper: float = Field(0.1, gt=0, le=1)
+
+
+class DiDRequest(BaseModel):
+    """Request model for difference-in-differences"""
+    data: List[Dict[str, Any]] = Field(..., description="Rows as records", min_length=4)
+    group_col: str
+    time_col: str
+    outcome_col: str
+    treatment_group: Any
+    post_period: Any
+    cluster_col: Optional[str] = None
+
+
+class IVRequest(BaseModel):
+    """Request model for instrumental variables (2SLS)"""
+    data: List[Dict[str, Any]] = Field(..., description="Rows as records", min_length=4)
+    outcome_col: str
+    treatment_col: str
+    instrument_col: str
+    covariate_cols: Optional[List[str]] = None
+
+
+class DecisionRequest(BaseModel):
+    """Request model for the ship decision"""
+    primary: Dict[str, Any] = Field(..., description="Result object from any A/B test endpoint")
+    guardrails: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    health: Optional[Dict[str, Any]] = Field(None, description="Result object from /api/health-check")
+    higher_is_better: bool = True
+    guardrail_higher_is_better: Dict[str, bool] = Field(default_factory=dict)
+    mde_pct: Optional[float] = Field(None, ge=0)
 
 
 # =============== ENGINE ===============
 
 from modules.ab_testing import ABTestingEngine
+from modules.causal_inference import CausalInferenceLab
+from modules.health_checks import HealthChecker
+from utils.decision import ship_decision
 
 _ab_engine = ABTestingEngine()
+_causal_lab = CausalInferenceLab()
+
+
+def _jsonable(value: Any) -> Any:
+    """Convert numpy / pandas values into plain JSON types; drop what cannot be serialised"""
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()
+                if not isinstance(v, pd.DataFrame) or k in ('balance_stats', 'coefficients')}
+    if isinstance(value, pd.DataFrame):
+        return _jsonable(value.to_dict(orient='records'))
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _run(name: str, fn, *args, **kwargs) -> JSONResponse:
+    """Run an analysis; bad input is a 400, anything else is a real server error"""
+    try:
+        return JSONResponse(content=_jsonable(fn(*args, **kwargs)))
+    except (ValueError, KeyError) as e:
+        logger.warning(f"{name} rejected: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 def get_ab_engine() -> ABTestingEngine:
@@ -156,7 +289,18 @@ async def root():
             "z-test": "/api/ab-test/z-test",
             "chi-squared": "/api/ab-test/chi-squared",
             "bayesian": "/api/ab-test/bayesian",
-            "power-analysis": "/api/ab-test/power-analysis"
+            "power-analysis": "/api/ab-test/power-analysis",
+            "proportions": "/api/ab-test/proportions",
+            "mann-whitney": "/api/ab-test/mann-whitney",
+            "bootstrap": "/api/ab-test/bootstrap",
+            "cuped": "/api/ab-test/cuped",
+            "multi-variant": "/api/ab-test/multi-variant",
+            "sequential": "/api/ab-test/sequential",
+            "health-check": "/api/health-check",
+            "decision": "/api/decision",
+            "psm": "/api/causal/psm",
+            "did": "/api/causal/did",
+            "iv": "/api/causal/iv"
         }
     }
 
@@ -275,6 +419,109 @@ async def run_power_analysis(request: PowerAnalysisRequest):
     except Exception as e:
         logger.error(f"Power analysis error: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/ab-test/proportions")
+async def run_proportions(request: ProportionsRequest):
+    """Two-proportion z-test for conversion-style metrics, with a CI on relative lift"""
+    return _run("proportions", get_ab_engine().proportions_test, **request.model_dump())
+
+
+@app.post("/api/ab-test/mann-whitney")
+async def run_mann_whitney(request: TwoSampleRequest):
+    """Mann-Whitney U test for skewed or heavy-tailed metrics"""
+    return _run(
+        "mann-whitney", get_ab_engine().mann_whitney_test,
+        np.array(request.control), np.array(request.treatment), alpha=request.alpha
+    )
+
+
+@app.post("/api/ab-test/bootstrap")
+async def run_bootstrap(request: TwoSampleRequest):
+    """Percentile bootstrap for the difference in means and relative lift"""
+    return _run(
+        "bootstrap", get_ab_engine().bootstrap_test,
+        np.array(request.control), np.array(request.treatment), alpha=request.alpha
+    )
+
+
+@app.post("/api/ab-test/cuped")
+async def run_cuped(request: CupedRequest):
+    """CUPED variance reduction using a pre-experiment covariate"""
+    return _run(
+        "cuped", get_ab_engine().cuped_test,
+        np.array(request.control), np.array(request.treatment),
+        np.array(request.control_covariate), np.array(request.treatment_covariate),
+        alpha=request.alpha
+    )
+
+
+@app.post("/api/ab-test/multi-variant")
+async def run_multi_variant(request: MultiVariantRequest):
+    """Every variant against control, with p-values corrected for multiple comparisons"""
+    return _run(
+        "multi-variant", get_ab_engine().multi_variant_test,
+        {k: np.array(v) for k, v in request.groups.items()},
+        request.control_label, alpha=request.alpha, correction=request.correction
+    )
+
+
+@app.post("/api/ab-test/sequential")
+async def run_sequential(request: SequentialRequest):
+    """Always-valid sequential test (mixture SPRT): safe to check at every look"""
+    return _run(
+        "sequential", get_ab_engine().sequential_test,
+        np.array(request.control), np.array(request.treatment),
+        alpha=request.alpha, tau=request.tau, n_looks=request.n_looks
+    )
+
+
+@app.post("/api/health-check")
+async def run_health_check(request: HealthCheckRequest):
+    """Sample ratio mismatch, outliers, missing data, variance ratio, and normality checks"""
+    if len(request.group) != len(request.metric):
+        raise HTTPException(status_code=400, detail="group and metric must be the same length")
+    df = pd.DataFrame({'group': request.group, 'metric': request.metric})
+    return _run(
+        "health-check", HealthChecker().run_all_checks,
+        df, 'group', 'metric', expected_ratio=request.expected_ratio
+    )
+
+
+@app.post("/api/decision")
+async def run_decision(request: DecisionRequest):
+    """Combine primary metric, guardrails, and health checks into one ship decision"""
+    return _run("decision", ship_decision, **request.model_dump())
+
+
+@app.post("/api/causal/psm")
+async def run_psm(request: PSMRequest):
+    """Propensity score matching (1:1 nearest neighbour within a caliper)"""
+    return _run(
+        "psm", _causal_lab.propensity_score_matching,
+        pd.DataFrame(request.data), request.treatment_col, request.outcome_col,
+        request.covariate_cols, caliper=request.caliper, treated_value=request.treated_value
+    )
+
+
+@app.post("/api/causal/did")
+async def run_did(request: DiDRequest):
+    """Difference-in-differences with robust or cluster-robust standard errors"""
+    return _run(
+        "did", _causal_lab.difference_in_differences,
+        pd.DataFrame(request.data), request.group_col, request.time_col, request.outcome_col,
+        request.treatment_group, request.post_period, cluster_col=request.cluster_col
+    )
+
+
+@app.post("/api/causal/iv")
+async def run_iv(request: IVRequest):
+    """Two-stage least squares with a partial-F weak-instrument check"""
+    return _run(
+        "iv", _causal_lab.instrumental_variables,
+        pd.DataFrame(request.data), request.outcome_col, request.treatment_col,
+        request.instrument_col, request.covariate_cols
+    )
 
 
 if __name__ == "__main__":

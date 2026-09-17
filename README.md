@@ -1,388 +1,220 @@
 # 🔬 Experimentation & Causal Analysis Suite
 
-[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://github.com/Aman12x/experimentation-suite/actions/workflows/tests.yml/badge.svg)](https://github.com/Aman12x/experimentation-suite/actions/workflows/tests.yml)
+[![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.31.0-FF4B4B.svg)](https://streamlit.io)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](tests/)
-[![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg)](Dockerfile)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/Aman12x/experimentation-suite/pulls)
 
-> Professional A/B testing & causal inference platform with automated health checks, Bayesian analysis, and plain-English business interpretations
+An A/B testing and causal inference toolkit that answers the question a product team actually asks: **ship it, don't ship it, or keep running?** One statistics engine sits behind a Streamlit app, a REST API, and a command-line demo, and every method is checked by simulation against the guarantee it claims.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Statistical_Methods-8-blue" alt="8 Statistical Methods">
-  <img src="https://img.shields.io/badge/Causal_Inference-3_Methods-purple" alt="3 Causal Methods">
-  <img src="https://img.shields.io/badge/Health_Checks-5-orange" alt="5 Health Checks">
-  <img src="https://img.shields.io/badge/Export_Formats-3-green" alt="3 Export Formats">
-</p>
+**Live app:** https://experiment-suite.streamlit.app
 
 ---
 
-## ✨ Features
+## What it does
 
-### A/B Testing Engine
-- **Statistical Tests**: T-tests, Z-tests, Chi-squared tests
-- **Bayesian A/B Testing**: Beta-Binomial conjugate priors with posterior distributions
-- **Power Analysis**: Calculate required sample sizes for desired effect detection
-- **Effect Size Metrics**: Cohen's d, relative lift, confidence intervals
+**A/B testing**
+- Welch's t-test by default (Student's is opt-in), z-test, two-proportion z-test, chi-squared
+- Confidence interval on **relative lift** via the delta method, not just on the absolute difference
+- **CUPED** variance reduction with a pre-experiment covariate
+- **Sequential testing** with always-valid p-values (mixture SPRT), so checking results daily does not inflate false positives
+- **Multiple variants** against one control with Holm, Bonferroni, or Benjamini-Hochberg correction
+- Mann-Whitney U and percentile bootstrap for skewed metrics such as revenue
+- Bayesian Beta-Binomial test with probability of being better, credible interval on lift, and expected loss per arm
+- Power analysis and sample-size calculator
 
-### Causal Inference Lab
-- **Propensity Score Matching (PSM)**: Handle observational data with covariate balancing
-- **Difference-in-Differences (DiD)**: Analyze intervention effects over time
-- **Instrumental Variables (IV)**: Two-Stage Least Squares estimation for endogeneity
-- **Balance Diagnostics**: Standardized mean differences and covariate balance checks
+**Decision layer**
+- Guardrail metrics, each with its own direction (higher or lower is better)
+- A single verdict with reasons: `SHIP`, `DO NOT SHIP`, `KEEP RUNNING`, `STOP - NO MEANINGFUL EFFECT`, or `INVALID - FIX THE EXPERIMENT`
+- Health checks that run before any result is shown: sample ratio mismatch (any number of arms, any expected split), outliers, missing data, variance ratio, normality
 
-### Health Checks & Quality Assurance
-- **Sample Ratio Mismatch (SRM) Detection**: Identify data quality issues
-- **Outlier Detection**: IQR-based outlier identification
-- **Missing Data Analysis**: Assess data completeness by group
-- **Variance Ratio Checks**: Levene's test for equal variances
-- **Normality Testing**: Shapiro-Wilk and Kolmogorov-Smirnov tests
+**Causal inference for observational data**
+- Propensity score matching (1:1 nearest neighbour within a caliper) with balance before and after
+- Difference-in-differences with heteroskedasticity-robust or cluster-robust standard errors
+- Event-study DiD with a joint **pre-trend test** when several pre-treatment periods exist
+- Instrumental variables by 2SLS, with a weak-instrument check on the instrument's **partial** first-stage F
 
-### Explainability
-- **Plain English Summaries**: Business-friendly interpretations of p-values, confidence intervals, and ATT
-- **Automated Recommendations**: Clear guidance on whether to implement changes
-- **Interactive Visualizations**: Publication-quality Plotly charts
-
-### Export & Reporting
-- **Multiple Formats**: Excel, Markdown, HTML
-- **Comprehensive Reports**: Include statistical details, interpretations, and recommendations
+**Output**
+- Plain-English interpretation of every result
+- Excel, Markdown, and HTML reports that lead with the decision
 
 ---
 
-## 🚀 Quick Start
+## Does the statistics hold up?
 
-### Option 1: Using Docker (Recommended)
+`python validate.py` simulates data where the truth is known and measures each method's long-run behaviour next to the naive alternative. Output from the current code:
+
+| Check | Target | Measured | Naive alternative |
+|---|---|---|---|
+| t-test false-positive rate (unequal n and variance) | 5% | 5.5% | Student's pooled: 44.3% |
+| Relative-lift 95% CI coverage | 95% | 94.7% | absolute CI / control mean: 93.7% |
+| CUPED power to detect a true +1.5 effect (n=400/arm) | higher is better | 75.6% (variance cut 83%) | plain Welch: 16.6% |
+| Chance of any false win, 5 null variants | ≤ 5% | 3.2% | uncorrected: 18.5% |
+| False-positive rate with 20 interim looks | ≤ 5% | 1.2% | peeking at fixed-horizon p: 25.4% |
+| 2SLS 95% CI coverage with an unobserved confounder | 95% | 95.0% | OLS within ±0.1 of truth: 0.0% |
+
+The same properties are enforced with tolerances in `tests/`, so a regression in any of them fails CI.
+
+---
+
+## Quick start
 
 ```bash
-# Pull and run the Docker container
-docker build -t experimentation-suite .
-docker run -p 8501:8501 -p 8000:8000 experimentation-suite
-
-# Access the app
-# UI: http://localhost:8501
-# API: http://localhost:8000/docs
-```
-
-### Option 2: Local Installation
-
-```bash
-# Clone the repository
 git clone https://github.com/Aman12x/experimentation-suite.git
 cd experimentation-suite
-
-# Install dependencies
 pip install -r requirements.txt
 
-# Run the Streamlit app
-streamlit run app.py
-
-# Or run the API server
-python api_server.py
+streamlit run app.py        # UI on http://localhost:8501
+python api_server.py        # API on http://localhost:8000, docs at /docs
+python demo.py              # command-line tour, no server
+python validate.py          # simulation report shown above
 ```
 
-### Option 3: Quick Demo (No Installation)
+No data needed: pick one of the bundled datasets under **"Or try a sample dataset"** in the sidebar. The *multi-variant checkout test* shows the most in one run: three arms, a covariate for CUPED, and a variant that wins on revenue while slowing page loads.
+
+### Docker
 
 ```bash
-# Run the standalone demo
-python demo.py
+docker compose up           # UI on :8501, API on :8000
 ```
 
 ---
 
-## 📊 Usage
+## The demo in 20 lines
 
-### Web Interface (Streamlit)
+`python demo.py`, abridged:
 
-1. Upload your CSV/Parquet dataset
-2. Select analysis type (A/B Test or Causal Inference)
-3. Configure parameters
-4. Review automated health checks
-5. Interpret results with plain English explanations
-6. Export reports in your preferred format
+```
+Revenue vs control (holm-corrected):
+  express_pay          lift  +4.72%   p_raw=0.0085   p_adj=0.0170   significant
+  one_page_checkout    lift  +2.01%   p_raw=0.2526   p_adj=0.2526   not significant
 
-### API (REST)
+  one_page_checkout: KEEP RUNNING
+    - No significant effect yet (p=0.2526), and the interval [-1.47%, +5.48%] still allows a meaningful lift.
 
-```bash
-# Run the API server
-python api_server.py
+  express_pay: DO NOT SHIP
+    - Guardrail 'page_load_ms' got significantly worse (+12.17%, p=0.0000).
+    - Primary metric improved (+4.72%), but not at the cost of a guardrail.
 
-# Example: Run T-test via API
-curl -X POST "http://localhost:8000/api/ab-test/t-test" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "control": [98, 102, 95, 105, 99],
-    "treatment": [110, 115, 108, 112, 109],
-    "alpha": 0.05
-  }'
+CUPED: same data, tighter interval
+  Covariate correlation:   0.97
+  Variance removed:        93.3%
+  Plain Welch  CI: [-1.21, +4.61]  p=0.2526
+  CUPED        CI: [+2.74, +4.26]  p=0.0000
 ```
 
-**API Documentation**: Visit `http://localhost:8000/docs` for interactive Swagger docs
+`one_page_checkout` looks like a null result until CUPED removes the noise that pre-experiment spend already explains. `express_pay` wins the primary metric and is still blocked, because it costs page speed.
 
 ---
 
-## 🧪 Running Tests
+## Python API
 
-```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=modules --cov=utils --cov-report=html
-
-# Run specific test file
-pytest tests/test_ab_testing.py -v
-
-# Run tests with markers
-pytest -m "unit"  # Only unit tests
-pytest -m "integration"  # Only integration tests
-```
-
-**Test Coverage**: See `htmlcov/index.html` after running coverage
-
----
-
-## 🐳 Docker Usage
-
-### Build Image
-
-```bash
-docker build -t experimentation-suite .
-```
-
-### Run Container
-
-```bash
-# Run Streamlit UI only
-docker run -p 8501:8501 experimentation-suite
-
-# Run both UI and API
-docker run -p 8501:8501 -p 8000:8000 experimentation-suite
-
-# Run with volume mount for data persistence
-docker run -p 8501:8501 -v $(pwd)/data:/app/data experimentation-suite
-```
-
-### Docker Compose
-
-```bash
-# Start all services
-docker-compose up
-
-# Start in detached mode
-docker-compose up -d
-
-# Stop services
-docker-compose down
-```
-
----
-
-## 📖 Documentation
-
-- **[QUICKSTART.md](QUICKSTART.md)** - Get started in 5 minutes
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Technical design details
-
----
-
-## 🎯 Example Use Cases
-
-### 1. A/B Test Analysis
 ```python
-from modules.ab_testing import ABTestingEngine
+from modules import ABTestingEngine
+from utils import ship_decision
 
 engine = ABTestingEngine()
-results = engine.t_test(
-    control=[100, 102, 98, 105],
-    treatment=[110, 115, 108, 112],
-    alpha=0.05
+
+primary = engine.cuped_test(control_revenue, treatment_revenue,
+                            control_pre_revenue, treatment_pre_revenue)
+latency = engine.t_test(control_latency, treatment_latency)
+
+verdict = ship_decision(
+    primary,
+    guardrails={"latency": latency},
+    guardrail_higher_is_better={"latency": False},
+    mde_pct=2.0,
 )
-print(f"P-value: {results['p_value']:.4f}")
-print(f"Significant: {results['significant']}")
+print(verdict["decision"], verdict["reasons"])
 ```
 
-### 2. Propensity Score Matching
 ```python
-from modules.causal_inference import CausalInferenceLab
+from modules import CausalInferenceLab
 
 lab = CausalInferenceLab()
-results = lab.propensity_score_matching(
-    df=data,
-    treatment_col='received_treatment',
-    outcome_col='revenue',
-    covariate_cols=['age', 'tenure', 'region']
-)
-print(f"ATT: {results['att']:.2f}")
+did = lab.difference_in_differences(df, "region", "period", "sales",
+                                    treatment_group="treatment", post_period="post",
+                                    cluster_col="store_id")
+pre_trends = lab.event_study(df, "region", ["year", "quarter"], "sales",
+                             treatment_group="treatment", first_treated_period=(2024, 1),
+                             cluster_col="store_id")
 ```
 
-### 3. Via REST API
+## REST API
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/ab-test/t-test`, `/z-test`, `/proportions`, `/chi-squared` | Frequentist tests |
+| `POST /api/ab-test/mann-whitney`, `/bootstrap` | Distribution-free tests |
+| `POST /api/ab-test/cuped` | Variance reduction |
+| `POST /api/ab-test/multi-variant` | Many variants, corrected p-values |
+| `POST /api/ab-test/sequential` | Always-valid monitoring |
+| `POST /api/ab-test/bayesian`, `/power-analysis` | Bayesian test, sample size |
+| `POST /api/health-check` | SRM and data-quality checks |
+| `POST /api/decision` | Ship decision from test outputs |
+| `POST /api/causal/psm`, `/did`, `/iv` | Causal methods on row records |
+
 ```bash
-curl -X POST http://localhost:8000/api/ab-test/bayesian \
+curl -X POST http://localhost:8000/api/ab-test/proportions \
   -H "Content-Type: application/json" \
-  -d '{
-    "control_success": 50,
-    "control_total": 1000,
-    "treatment_success": 65,
-    "treatment_total": 1000
-  }'
+  -d '{"control_success": 50, "control_total": 1000, "treatment_success": 65, "treatment_total": 1000}'
 ```
+
+Invalid input returns `400` or `422` with the reason. Interactive docs are at `/docs`.
 
 ---
 
-## 📁 Project Structure
+## Project layout
 
 ```
-experimentation-suite/
-├── app.py                      # Main Streamlit application
-├── api_server.py               # FastAPI REST server
-├── Dockerfile                  # Docker configuration
-├── docker-compose.yml          # Docker Compose setup
-├── requirements.txt            # Python dependencies
-├── requirements-dev.txt        # Development dependencies
-├── pytest.ini                  # Pytest configuration
-├── .dockerignore              # Docker ignore file
-├── README.md                   # This file
-│
-├── modules/                    # Core business logic
-│   ├── __init__.py
-│   ├── data_handler.py        # Data loading & validation
-│   ├── ab_testing.py          # Statistical tests
-│   ├── causal_inference.py    # PSM, DiD, IV methods
-│   ├── health_checks.py       # Quality assurance
-│   └── visualizations.py      # Plotly charts
-│
-├── utils/                      # Utilities
-│   ├── __init__.py
-│   ├── interpreters.py        # Plain English explanations
-│   └── report_generator.py    # Export functionality
-│
-├── tests/                      # Unit & integration tests
-│   ├── __init__.py
-│   ├── test_ab_testing.py
-│   ├── test_api.py
-│   └── conftest.py            # Pytest fixtures
-│
-└── data/                       # Sample datasets
-    ├── sample_ab_test_data.csv
-    ├── sample_did_data.csv
-    └── ecommerce_ab_test.csv
+app.py                  Streamlit UI
+api_server.py           FastAPI server (same engine as the UI)
+demo.py                 Command-line tour
+validate.py             Simulation report
+modules/
+  ab_testing.py         Core tests, power analysis, Bayesian
+  ab_advanced.py        Proportions, lift CI, CUPED, bootstrap, multi-variant, sequential
+  causal_inference.py   PSM, DiD, event study, IV
+  health_checks.py      SRM and data-quality checks
+  data_handler.py       Loading and validation
+  visualizations.py     Plotly charts
+utils/
+  decision.py           Ship decision
+  interpreters.py       Plain-English explanations
+  report_generator.py   Excel / Markdown / HTML export
+data/                   Sample datasets and the generator for the synthetic one
+tests/                  Unit, simulation, API, and headless end-to-end app tests
 ```
 
----
+The modules have no Streamlit dependency, so they import cleanly into notebooks, jobs, or the API. See [ARCHITECTURE.md](ARCHITECTURE.md) for design notes and [QUICKSTART.md](QUICKSTART.md) for a guided first run.
 
-## 🔧 Configuration
-
-### Environment Variables
+## Tests
 
 ```bash
-# API Configuration
-API_HOST=0.0.0.0
-API_PORT=8000
-API_WORKERS=4
-
-# Streamlit Configuration
-STREAMLIT_PORT=8501
-STREAMLIT_THEME=light
-
-# Logging
-LOG_LEVEL=INFO
-LOG_FILE=app.log
+pip install -r requirements-dev.txt
+pytest                                   # everything
+pytest -m "not slow"                     # skip the simulations
+pytest --cov=modules --cov=utils         # CI fails under 80% coverage
 ```
 
-### Docker Environment
+## Assumptions worth knowing
 
-Create a `.env` file:
-```env
-PYTHONUNBUFFERED=1
-API_PORT=8000
-STREAMLIT_PORT=8501
-```
+- **Welch's t-test** compares means; with heavy skew and small samples prefer the bootstrap.
+- **CUPED** needs a covariate measured *before* assignment. A post-assignment covariate biases the estimate.
+- **Sequential test** uses a normal mixing prior whose width defaults to 10% of the pooled standard deviation. It trades some power for the right to stop at any look.
+- **PSM** only balances what you measured. Unobserved confounders remain.
+- **DiD** rests on parallel trends. Two periods cannot test it; the event study can support it but never prove it.
+- **IV** needs an instrument that moves the treatment and touches the outcome through nothing else. Only the first part is testable.
 
----
+## References
 
-## 🤝 Contributing
+- Deng, Xu, Kohavi, Walker (2013). *Improving the Sensitivity of Online Controlled Experiments by Utilizing Pre-Experiment Data* (CUPED)
+- Johari, Koomen, Pekelis, Walsh (2017). *Peeking at A/B Tests: Why It Matters, and What to Do About It* (always-valid inference)
+- Fabijan et al. (2019). *Diagnosing Sample Ratio Mismatch in Online Controlled Experiments*
+- Holm (1979); Benjamini & Hochberg (1995). Multiple-comparison corrections
+- Angrist & Pischke (2009). *Mostly Harmless Econometrics*
+- Imbens & Rubin (2015). *Causal Inference for Statistics, Social, and Biomedical Sciences*
+- Gelman et al. (2013). *Bayesian Data Analysis*
 
-Contributions are welcome! Feel free to open an issue or pull request.
+## License
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Run tests (`pytest`)
-4. Commit your changes (`git commit -m 'Add AmazingFeature'`)
-5. Push to the branch (`git push origin feature/AmazingFeature`)
-6. Open a Pull Request
-
----
-
-## 📊 Key Design Principles
-
-1. **Statistical Rigor**: Proper hypothesis testing, multiple comparison corrections, and effect size reporting
-2. **Business Clarity**: Plain English interpretations accessible to non-statisticians
-3. **Transparency**: Full disclosure of assumptions, limitations, and diagnostics
-4. **Reproducibility**: Exportable reports with complete methodology
-5. **Usability**: Intuitive interface with helpful guidance and warnings
-
----
-
-## 🚨 Important Considerations
-
-### When to Use Each Test:
-- **T-Test**: Continuous metrics, approximately normal distribution, equal variances
-- **Z-Test**: Large samples (n>30), known population variance
-- **Chi-Squared**: Categorical outcomes, count data
-- **Bayesian**: When you want probabilistic statements or have prior information
-
-### Causal Inference Assumptions:
-- **PSM**: No unmeasured confounders, overlap in propensity scores
-- **DiD**: Parallel trends assumption, no anticipation effects
-- **IV**: Instrument relevance, exclusion restriction, monotonicity
-
----
-
-## 📚 References
-
-### Statistical Testing
-- Cohen, J. (1988). Statistical Power Analysis for the Behavioral Sciences
-- Deng, A. et al. (2017). "Continuous Monitoring of A/B Tests without Pain"
-
-### Causal Inference
-- Pearl, J. (2009). Causality: Models, Reasoning, and Inference
-- Angrist, J. & Pischke, J. (2009). Mostly Harmless Econometrics
-- Imbens, G. & Rubin, D. (2015). Causal Inference for Statistics
-
-### Bayesian Methods
-- Gelman, A. et al. (2013). Bayesian Data Analysis
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🌟 Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Aman12x/experimentation-suite&type=Date)](https://star-history.com/#Aman12x/experimentation-suite&Date)
-
----
-
-## 💡 Acknowledgments
-
-- Built with [Streamlit](https://streamlit.io)
-- Statistical computing powered by [SciPy](https://scipy.org) and [Statsmodels](https://www.statsmodels.org)
-- Visualizations created with [Plotly](https://plotly.com)
-- API framework by [FastAPI](https://fastapi.tiangolo.com)
-
----
-
-**Built with ❤️ using Python, Streamlit, FastAPI, SciPy, Statsmodels, and Plotly**
-
-<p align="center">
-  <a href="#-quick-start">Quick Start</a> •
-  <a href="#-usage">Usage</a> •
-  <a href="#-running-tests">Tests</a> •
-  <a href="#-docker-usage">Docker</a> •
-  <a href="#-contributing">Contributing</a>
-</p>
-
+MIT. See [LICENSE](LICENSE).

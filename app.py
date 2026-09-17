@@ -548,6 +548,8 @@ if has_data:
                             st.plotly_chart(fig_ci, use_container_width=True)
                     
                     else:  # Bayesian results
+                        # No frequentist decision for this run; do not export a stale one
+                        st.session_state.pop('ab_decision', None)
                         col1, col2, col3 = st.columns(3)
                         
                         with col1:
@@ -563,8 +565,18 @@ if has_data:
                             )
                         
                         with col3:
-                            recommendation = "✅ Implement" if results['prob_treatment_better'] > 0.95 else "⚠️ Uncertain"
+                            if results['prob_treatment_better'] > 0.95:
+                                recommendation = "✅ Implement"
+                            elif results['prob_treatment_better'] < 0.05:
+                                recommendation = "❌ Keep Control"
+                            else:
+                                recommendation = "⚠️ Uncertain"
                             st.metric("Recommendation", recommendation)
+                        
+                        st.caption(
+                            f"Expected loss if you ship treatment: {results['expected_loss_treatment']*100:.3f} pp · "
+                            f"if you keep control: {results['expected_loss_control']*100:.3f} pp"
+                        )
                         
                         # Bayesian interpretation
                         st.subheader("💡 Bayesian Interpretation")
@@ -1015,8 +1027,10 @@ if has_data:
         has_ab_results = 'ab_test_results' in st.session_state
         has_psm_results = 'psm_results' in st.session_state
         has_did_results = 'did_results' in st.session_state
+        has_iv_results = 'iv_results' in st.session_state
+        has_mv_results = 'multi_variant_results' in st.session_state
         
-        if not (has_ab_results or has_psm_results or has_did_results):
+        if not (has_ab_results or has_psm_results or has_did_results or has_iv_results or has_mv_results):
             st.info("ℹ️ No analysis results available. Please run an analysis first.")
         else:
             # Select which results to export
@@ -1027,6 +1041,10 @@ if has_data:
                 export_options.append("PSM Results")
             if has_did_results:
                 export_options.append("DiD Results")
+            if has_iv_results:
+                export_options.append("IV Results")
+            if has_mv_results:
+                export_options.append("Multi-Variant Results")
             
             selected_export = st.selectbox(
                 "Select Results to Export",
@@ -1050,10 +1068,23 @@ if has_data:
                         results = st.session_state.psm_results
                         interpretation = st.session_state.interpreter.interpret_causal_effect(results, "PSM")
                         test_type = "Propensity Score Matching"
+                    elif selected_export == "IV Results":
+                        results = st.session_state.iv_results
+                        interpretation = st.session_state.interpreter.interpret_causal_effect(results, "IV")
+                        test_type = "Instrumental Variables (2SLS)"
+                    elif selected_export == "Multi-Variant Results":
+                        results = st.session_state.multi_variant_results
+                        interpretation = st.session_state.interpreter.interpret_multi_variant(results)
+                        test_type = f"Multi-Variant ({results['correction']} correction)"
                     else:
                         results = st.session_state.did_results
                         interpretation = st.session_state.interpreter.interpret_causal_effect(results, "DiD")
                         test_type = "Difference-in-Differences"
+                    
+                    decision = (
+                        st.session_state.get('ab_decision')
+                        if selected_export == "A/B Test Results" else None
+                    )
                     
                     # Generate export
                     if export_format == 'Excel':
@@ -1074,7 +1105,8 @@ if has_data:
                         md_report = st.session_state.report_gen.create_markdown_report(
                             results,
                             interpretation,
-                            test_type
+                            test_type,
+                            decision=decision
                         )
                         
                         st.download_button(
@@ -1091,7 +1123,8 @@ if has_data:
                         html_report = st.session_state.report_gen.create_html_report(
                             results,
                             interpretation,
-                            test_type
+                            test_type,
+                            decision=decision
                         )
                         
                         st.download_button(
