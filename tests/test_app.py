@@ -61,14 +61,62 @@ def test_control_group_is_control_even_when_treatment_rows_come_first():
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("test_type", ["T-Test", "Z-Test", "Chi-Squared", "Bayesian"])
-def test_every_ab_test_type_runs(test_type):
+@pytest.mark.parametrize("test_type,metric", [
+    ("T-Test", "revenue"), ("Z-Test", "revenue"), ("Mann-Whitney U", "revenue"),
+    ("Bootstrap", "revenue"), ("Sequential (always-valid)", "revenue"),
+    ("Proportions Z-Test", "conversion"), ("Chi-Squared", "conversion"), ("Bayesian", "conversion"),
+])
+def test_every_ab_test_type_runs(test_type, metric):
     at = load_app("A/B test (revenue, conversion)")
-    select(at, "Metric Column", "revenue")
+    select(at, "Metric Column", metric)
     select(at, "Test Type", test_type).run()
     at = click(at, "Run A/B Test")
     assert not at.exception
     assert not at.error
+
+
+@pytest.mark.integration
+def test_binary_only_test_refuses_continuous_metric():
+    """Used to silently median-split revenue into a fake conversion metric"""
+    at = load_app("A/B test (revenue, conversion)")
+    select(at, "Metric Column", "revenue")
+    select(at, "Test Type", "Chi-Squared").run()
+    at = click(at, "Run A/B Test")
+    assert not at.exception
+    assert any("needs a 0/1 metric" in e.value for e in at.error)
+
+
+MULTI = "Multi-variant checkout test (CUPED, guardrails)"
+
+
+@pytest.mark.integration
+def test_multi_variant_flow_corrects_and_blocks_on_guardrail():
+    """express_pay wins on revenue but slows pages; the decision must catch that"""
+    at = load_app(MULTI)
+    select(at, "Metric Column", "revenue").run()
+    next(m for m in at.multiselect if m.label.startswith("Guardrail")).select("page_load_ms").run()
+    next(m for m in at.multiselect if m.label.startswith("Metrics Where Lower")).select("page_load_ms").run()
+    at = click(at, "Run A/B Test")
+    
+    assert not at.exception
+    assert any("All Variants vs Control" in h.value for h in at.subheader)
+    assert any("express_pay" in i.value for i in at.info)
+    assert [e.value for e in at.error] == ["**DO NOT SHIP**"]
+    body = " ".join(m.value for m in at.markdown)
+    assert "Guardrail 'page_load_ms' got significantly worse" in body
+
+
+@pytest.mark.integration
+def test_cuped_flow_reports_variance_reduction():
+    at = load_app(MULTI)
+    select(at, "Metric Column", "revenue")
+    select(at, "Test Type", "CUPED (variance reduction)").run()
+    select(at, "Pre-Experiment Covariate", "pre_revenue").run()
+    at = click(at, "Run A/B Test")
+    
+    assert not at.exception
+    assert not at.error
+    assert any("CUPED Variance Reduction" in m.value for m in at.markdown)
 
 
 @pytest.mark.integration
@@ -101,6 +149,26 @@ def test_did_runs_with_clustered_errors():
     assert not at.error
     assert "DiD Estimate" in metrics(at)
     assert any("Not testable" in m.value for m in at.markdown)
+
+
+@pytest.mark.integration
+def test_did_pre_trend_test_runs_on_quarterly_data():
+    at = load_app("Difference-in-differences (store sales)")
+    select(at, "Select Causal Method", "Difference-in-Differences (DiD)").run()
+    select(at, "Group Column", "region")
+    select(at, "Time Period Column", "period")
+    select(at, "Outcome Column", "sales").run()
+    select(at, "Treatment Group Value", "treatment")
+    select(at, "Post-Treatment Period Value", "post").run()
+    next(m for m in at.multiselect if m.label.startswith("Time Index")).select("year").select("quarter").run()
+    
+    first = next(s for s in at.selectbox if s.label == "First Treated Period")
+    assert first.value == "2024 / 1"
+    
+    at = click(at, "Run DiD Analysis")
+    assert not at.exception
+    assert not at.error
+    assert any("Pre-Trend Test" in h.value for h in at.subheader)
 
 
 @pytest.mark.integration

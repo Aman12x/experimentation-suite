@@ -15,7 +15,42 @@ from modules import (
     HealthChecker,
     Visualizer
 )
-from utils import StatisticalInterpreter, ReportGenerator
+from modules.ab_advanced import is_binary_metric
+from utils import StatisticalInterpreter, ReportGenerator, ship_decision
+
+BINARY_ONLY_TESTS = ('Proportions Z-Test', 'Chi-Squared', 'Bayesian')
+TEST_TYPES = [
+    'T-Test', 'Z-Test', 'Proportions Z-Test', 'Chi-Squared', 'Bayesian',
+    'Mann-Whitney U', 'Bootstrap', 'CUPED (variance reduction)', 'Sequential (always-valid)'
+]
+
+
+def run_selected_test(engine, test_type, control, treatment, alpha,
+                      equal_var=False, control_cov=None, treatment_cov=None):
+    """Dispatch one control-vs-treatment comparison to the engine"""
+    if test_type in BINARY_ONLY_TESTS:
+        if not (is_binary_metric(control) and is_binary_metric(treatment)):
+            raise ValueError(
+                f"{test_type} needs a 0/1 metric such as a conversion flag. "
+                "For continuous metrics use T-Test, Mann-Whitney U, or Bootstrap."
+            )
+        counts = (int(control.sum()), len(control), int(treatment.sum()), len(treatment))
+        if test_type == 'Proportions Z-Test':
+            return engine.proportions_test(*counts, alpha=alpha)
+        if test_type == 'Chi-Squared':
+            return engine.chi_squared_test(*counts, alpha=alpha)
+        return engine.bayesian_ab_test(*counts)
+    if test_type == 'Z-Test':
+        return engine.z_test(control, treatment, alpha=alpha)
+    if test_type == 'Mann-Whitney U':
+        return engine.mann_whitney_test(control, treatment, alpha=alpha)
+    if test_type == 'Bootstrap':
+        return engine.bootstrap_test(control, treatment, alpha=alpha)
+    if test_type == 'CUPED (variance reduction)':
+        return engine.cuped_test(control, treatment, control_cov, treatment_cov, alpha=alpha)
+    if test_type == 'Sequential (always-valid)':
+        return engine.sequential_test(control, treatment, alpha=alpha)
+    return engine.t_test(control, treatment, alpha=alpha, equal_var=equal_var)
 
 # Page configuration
 st.set_page_config(
@@ -107,6 +142,7 @@ with st.sidebar:
         "A/B test (revenue, conversion)": "sample_ab_test_data.csv",
         "E-commerce A/B test (funnel)": "ecommerce_ab_test.csv",
         "Difference-in-differences (store sales)": "sample_did_data.csv",
+        "Multi-variant checkout test (CUPED, guardrails)": "multivariant_checkout_test.csv",
     }
     sample_choice = st.selectbox(
         "Or try a sample dataset",
@@ -211,7 +247,7 @@ if has_data:
             with col3:
                 test_type = st.selectbox(
                     "Test Type",
-                    options=['T-Test', 'Z-Test', 'Chi-Squared', 'Bayesian'],
+                    options=TEST_TYPES,
                     help="Statistical test to perform"
                 )
             
@@ -248,6 +284,53 @@ if has_data:
                 help="Off = Welch's t-test, which stays valid when variances or group sizes differ"
             )
             
+            compare_all = False
+            correction = 'holm'
+            if len(group_values) > 2:
+                mv_col1, mv_col2 = st.columns(2)
+                with mv_col1:
+                    compare_all = st.checkbox(
+                        "Compare all variants against control",
+                        value=True,
+                        help="Tests every variant and corrects p-values for the number of comparisons"
+                    )
+                with mv_col2:
+                    correction = st.selectbox(
+                        "Multiple Comparison Correction",
+                        options=['holm', 'bonferroni', 'fdr_bh', 'none'],
+                        help="Holm and Bonferroni control the chance of any false win; "
+                             "fdr_bh controls the share of false wins"
+                    )
+            
+            cuped_covariate = None
+            if test_type == 'CUPED (variance reduction)':
+                cuped_covariate = st.selectbox(
+                    "Pre-Experiment Covariate",
+                    options=[c for c in st.session_state.data_handler.numeric_columns if c != metric_col],
+                    help="Measured before assignment (e.g. last month's spend). "
+                         "The more it correlates with the metric, the more noise CUPED removes."
+                )
+            
+            gr_col1, gr_col2 = st.columns(2)
+            with gr_col1:
+                guardrail_cols = st.multiselect(
+                    "Guardrail Metrics (Optional)",
+                    options=[c for c in st.session_state.data_handler.numeric_columns if c != metric_col],
+                    help="Metrics that must not get worse, e.g. latency, refunds, support tickets"
+                )
+            with gr_col2:
+                lower_is_better = st.multiselect(
+                    "Metrics Where Lower Is Better",
+                    options=[metric_col] + guardrail_cols,
+                    help="e.g. page load time, churn"
+                )
+            
+            mde_pct = st.number_input(
+                "Smallest Lift Worth Shipping (%)",
+                value=2.0, min_value=0.0, step=0.5,
+                help="Used to tell 'keep running' apart from 'stop, there is nothing here'"
+            )
+            
             alpha = st.slider(
                 "Significance Level (α)",
                 min_value=0.01,
@@ -272,12 +355,14 @@ if has_data:
             else:
                 with st.spinner("Running analysis..."):
                     # Prepare data
-                    df = st.session_state.data_handler.prepare_ab_data(
-                        group_col, metric_col
-                    )
-                    n_groups = df[group_col].nunique()
-                    df = df[df[group_col].isin([control_group, treatment_group])]
-                    if n_groups > 2:
+                    raw = st.session_state.data_handler.data
+                    extra_cols = [c for c in [cuped_covariate] + guardrail_cols if c]
+                    full = raw[[group_col, metric_col] + extra_cols].dropna(subset=[group_col, metric_col])
+                    n_groups = full[group_col].nunique()
+                    multi = compare_all and n_groups > 2
+                    
+                    df = full if multi else full[full[group_col].isin([control_group, treatment_group])]
+                    if n_groups > 2 and not multi:
                         st.info(
                             f"ℹ️ {n_groups} groups found. Comparing **{treatment_group}** "
                             f"against **{control_group}** only."
@@ -302,41 +387,67 @@ if has_data:
                     
                     st.divider()
                     
-                    control_data = df[df[group_col] == control_group][metric_col].values
-                    treatment_data = df[df[group_col] == treatment_group][metric_col].values
+                    # Multi-variant: every variant against control, corrected p-values
+                    if multi:
+                        groups = {g: d[metric_col].values for g, d in df.groupby(group_col)}
+                        mv_results = st.session_state.ab_engine.multi_variant_test(
+                            groups, control_group, alpha=alpha, correction=correction
+                        )
+                        st.subheader("📊 All Variants vs Control")
+                        st.dataframe(pd.DataFrame([{
+                            'Variant': c['group'],
+                            'Control Mean': c['control_mean'],
+                            'Variant Mean': c['treatment_mean'],
+                            'Relative Lift (%)': c['relative_lift'],
+                            'p (raw)': c['p_value_raw'],
+                            f'p ({correction})': c['p_value_adjusted'],
+                            'Significant': '✅' if c['significant'] else '❌'
+                        } for c in mv_results['comparisons']]), use_container_width=True)
+                        st.markdown(
+                            st.session_state.interpreter.interpret_multi_variant(mv_results)
+                        )
+                        st.session_state.multi_variant_results = mv_results
+                        
+                        # Detailed view continues with the best variant, or the selected one
+                        if mv_results['best_variant'] is not None:
+                            treatment_group = next(
+                                g for g in groups if str(g) == mv_results['best_variant']
+                            )
+                        st.info(f"ℹ️ Detailed results below: **{treatment_group}** vs **{control_group}**")
                     
-                    # Run test based on type
-                    if test_type == 'T-Test':
-                        results = st.session_state.ab_engine.t_test(
-                            control_data, treatment_data, alpha=alpha,
-                            equal_var=assume_equal_var
+                    control_rows = df[df[group_col] == control_group]
+                    treatment_rows = df[df[group_col] == treatment_group]
+                    control_data = control_rows[metric_col].values
+                    treatment_data = treatment_rows[metric_col].values
+                    
+                    # Run the selected test
+                    try:
+                        if cuped_covariate:
+                            control_rows = control_rows.dropna(subset=[cuped_covariate])
+                            treatment_rows = treatment_rows.dropna(subset=[cuped_covariate])
+                            control_data = control_rows[metric_col].values
+                            treatment_data = treatment_rows[metric_col].values
+                        results = run_selected_test(
+                            st.session_state.ab_engine, test_type, control_data, treatment_data, alpha,
+                            equal_var=assume_equal_var,
+                            control_cov=control_rows[cuped_covariate].values if cuped_covariate else None,
+                            treatment_cov=treatment_rows[cuped_covariate].values if cuped_covariate else None
                         )
-                    elif test_type == 'Z-Test':
-                        results = st.session_state.ab_engine.z_test(
-                            control_data, treatment_data, alpha=alpha
+                    except ValueError as e:
+                        st.error(f"❌ {str(e)}")
+                        st.stop()
+                    
+                    # Guardrails: proportions test for 0/1 metrics, Welch otherwise
+                    guardrail_results = {}
+                    for g_col in guardrail_cols:
+                        g_control = control_rows[g_col].dropna().values
+                        g_treatment = treatment_rows[g_col].dropna().values
+                        g_test = (
+                            'Proportions Z-Test'
+                            if is_binary_metric(g_control) and is_binary_metric(g_treatment) else 'T-Test'
                         )
-                    elif test_type == 'Chi-Squared':
-                        # For chi-squared, need binary conversion
-                        st.info("ℹ️ Converting continuous metric to binary (above median = success)")
-                        control_median = np.median(control_data)
-                        control_success = np.sum(control_data > control_median)
-                        treatment_success = np.sum(treatment_data > control_median)
-                        
-                        results = st.session_state.ab_engine.chi_squared_test(
-                            control_success, len(control_data),
-                            treatment_success, len(treatment_data),
-                            alpha=alpha
-                        )
-                    else:  # Bayesian
-                        # Convert to binary for Bayesian
-                        st.info("ℹ️ Converting continuous metric to binary (above median = success)")
-                        control_median = np.median(control_data)
-                        control_success = np.sum(control_data > control_median)
-                        treatment_success = np.sum(treatment_data > control_median)
-                        
-                        results = st.session_state.ab_engine.bayesian_ab_test(
-                            control_success, len(control_data),
-                            treatment_success, len(treatment_data)
+                        guardrail_results[g_col] = run_selected_test(
+                            st.session_state.ab_engine, g_test, g_control, g_treatment, alpha
                         )
                     
                     # Display results
@@ -361,17 +472,57 @@ if has_data:
                         with col3:
                             st.metric(
                                 "Relative Lift",
-                                f"{results.get('relative_lift', 0):+.2f}%"
+                                f"{results.get('relative_lift', 0):+.2f}%",
+                                help=(
+                                    f"95% CI: [{results['lift_ci_lower']:+.2f}%, {results['lift_ci_upper']:+.2f}%]"
+                                    if 'lift_ci_lower' in results else None
+                                )
                             )
                         
                         with col4:
                             sig_label = "✅ Significant" if results['significant'] else "❌ Not Significant"
                             st.metric("Result", sig_label)
                         
+                        # Ship decision: primary metric + guardrails + health
+                        decision = ship_decision(
+                            results,
+                            guardrails=guardrail_results,
+                            health=health_results,
+                            higher_is_better=metric_col not in lower_is_better,
+                            guardrail_higher_is_better={g: g not in lower_is_better for g in guardrail_cols},
+                            mde_pct=mde_pct if mde_pct > 0 else None
+                        )
+                        st.subheader("🚦 Decision")
+                        decision_box = {
+                            'SHIP': st.success, 'DO NOT SHIP': st.error
+                        }.get(decision['decision'], st.warning)
+                        decision_box(f"**{decision['decision']}**")
+                        for reason in decision['reasons']:
+                            st.markdown(f"- {reason}")
+                        
+                        if guardrail_results:
+                            st.dataframe(pd.DataFrame([{
+                                'Guardrail': g,
+                                'Control': r['control_mean'],
+                                'Treatment': r['treatment_mean'],
+                                'Change (%)': r['relative_lift'],
+                                'p-value': r['p_value'],
+                                'Status': '🛑 Harmed' if g in decision['harmed_guardrails'] else '✅ Held'
+                            } for g, r in guardrail_results.items()]), use_container_width=True)
+                        st.session_state.ab_decision = decision
+                        
                         # Interpretation
                         st.subheader("💡 Business Interpretation")
-                        interpretation = st.session_state.interpreter.interpret_ab_test_results(results)
+                        interpretation = st.session_state.interpreter.interpret_ab_test_results(
+                            results, higher_is_better=metric_col not in lower_is_better
+                        )
                         st.markdown(interpretation)
+                        
+                        if test_type == 'Sequential (always-valid)':
+                            st.plotly_chart(
+                                st.session_state.visualizer.plot_sequential_path(results),
+                                use_container_width=True
+                            )
                         
                         # Visualizations
                         st.subheader("📈 Visualizations")
@@ -390,10 +541,11 @@ if has_data:
                             )
                             st.plotly_chart(fig_box, use_container_width=True)
                         
-                        fig_ci = st.session_state.visualizer.plot_confidence_interval(
-                            results, metric_col
-                        )
-                        st.plotly_chart(fig_ci, use_container_width=True)
+                        if 'ci_lower' in results:
+                            fig_ci = st.session_state.visualizer.plot_confidence_interval(
+                                results, metric_col
+                            )
+                            st.plotly_chart(fig_ci, use_container_width=True)
                     
                     else:  # Bayesian results
                         col1, col2, col3 = st.columns(3)
@@ -666,6 +818,35 @@ if has_data:
                     ],
                     help="Unit observed repeatedly, e.g. store_id or user_id"
                 )
+                
+                event_period_cols = st.multiselect(
+                    "Time Index Columns for Pre-Trend Test (Optional)",
+                    options=[
+                        c for c in st.session_state.data_handler.data.columns
+                        if c not in (group_col_did, time_col, outcome_col_did)
+                    ],
+                    help="Columns that order time in finer steps than pre/post, e.g. year then quarter. "
+                         "With several pre-treatment periods the parallel-trends assumption can be tested."
+                )
+                first_treated_label = None
+                if event_period_cols:
+                    ordered_periods = sorted(
+                        st.session_state.data_handler.data[event_period_cols]
+                        .dropna().apply(tuple, axis=1).unique()
+                    )
+                    period_labels = {' / '.join(map(str, k)): k for k in ordered_periods}
+                    post_rows = st.session_state.data_handler.data[
+                        st.session_state.data_handler.data[time_col] == post_period
+                    ]
+                    default_first = (
+                        min(post_rows[event_period_cols].dropna().apply(tuple, axis=1))
+                        if len(post_rows) else ordered_periods[-1]
+                    )
+                    first_treated_label = st.selectbox(
+                        "First Treated Period",
+                        options=list(period_labels),
+                        index=ordered_periods.index(default_first)
+                    )
             
             if st.button("🚀 Run DiD Analysis", type="primary"):
                 with st.spinner("Running Difference-in-Differences..."):
@@ -710,6 +891,40 @@ if has_data:
                         did_results['group_time_means']
                     )
                     st.plotly_chart(fig_trends, use_container_width=True)
+                    
+                    # Event study: test parallel trends when finer time periods are available
+                    if event_period_cols and first_treated_label:
+                        st.subheader("🔎 Pre-Trend Test (Event Study)")
+                        try:
+                            es_results = st.session_state.causal_lab.event_study(
+                                st.session_state.data_handler.data,
+                                group_col_did,
+                                event_period_cols,
+                                outcome_col_did,
+                                did_treatment_group,
+                                period_labels[first_treated_label],
+                                cluster_col=None if cluster_choice == '(none)' else cluster_choice
+                            )
+                            if es_results['parallel_trends_assumption']:
+                                st.success(
+                                    f"✅ No evidence of diverging pre-trends "
+                                    f"(joint test p={es_results['pre_trend_p_value']:.4f} across "
+                                    f"{es_results['n_pre_periods_tested']} pre-periods). "
+                                    "This supports, but cannot prove, the parallel-trends assumption."
+                                )
+                            else:
+                                st.error(
+                                    f"🛑 Pre-treatment trends differ between groups "
+                                    f"(joint test p={es_results['pre_trend_p_value']:.4f}). "
+                                    "The DiD estimate above is not credible as a causal effect."
+                                )
+                            st.plotly_chart(
+                                st.session_state.visualizer.plot_event_study(es_results['coefficients']),
+                                use_container_width=True
+                            )
+                            st.session_state.event_study_results = es_results
+                        except ValueError as e:
+                            st.warning(f"⚠️ Pre-trend test skipped: {str(e)}")
                     
                     # Model summary
                     with st.expander("📋 Full Regression Output"):

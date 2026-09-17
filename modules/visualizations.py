@@ -332,6 +332,85 @@ class Visualizer:
         
         return fig
     
+    def plot_sequential_path(self, results: Dict) -> go.Figure:
+        """
+        Plot always-valid vs fixed-horizon p-values across interim looks
+        
+        Args:
+            results: Output of ABTestingEngine.sequential_test
+            
+        Returns:
+            Plotly figure
+        """
+        looks = results['looks']
+        n = [l['n_control'] + l['n_treatment'] for l in looks]
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=n, y=[l['always_valid_p_value'] for l in looks],
+            mode='lines+markers', name='Always-valid p-value',
+            line=dict(width=3, color=self.color_palette['treatment'])
+        ))
+        fig.add_trace(go.Scatter(
+            x=n, y=[l['fixed_horizon_p_value'] for l in looks],
+            mode='lines+markers', name='Fixed-horizon p-value (unsafe to peek at)',
+            line=dict(width=2, dash='dot', color=self.color_palette['neutral'])
+        ))
+        fig.add_hline(
+            y=results['alpha'], line_dash="dash",
+            line_color=self.color_palette['warning'], annotation_text=f"α = {results['alpha']}"
+        )
+        fig.update_layout(
+            title="Sequential Monitoring: p-value at Each Look",
+            xaxis_title="Users Observed",
+            yaxis_title="p-value",
+            yaxis_type="log",
+            template='plotly_white',
+            height=450
+        )
+        return fig
+    
+    def plot_event_study(self, coefficients: pd.DataFrame) -> go.Figure:
+        """
+        Plot event-study coefficients with confidence intervals
+        
+        Args:
+            coefficients: 'coefficients' frame from CausalInferenceLab.event_study
+            
+        Returns:
+            Plotly figure
+        """
+        coefficients = coefficients.sort_values('event_time')
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=coefficients['event_time'],
+            y=coefficients['estimate'],
+            error_y=dict(
+                type='data', symmetric=False,
+                array=coefficients['ci_upper'] - coefficients['estimate'],
+                arrayminus=coefficients['estimate'] - coefficients['ci_lower']
+            ),
+            mode='markers+lines',
+            marker=dict(size=10, color=self.color_palette['treatment']),
+            text=coefficients['period'],
+            hovertemplate='%{text}<br>gap vs reference: %{y:.2f}<extra></extra>',
+            name='Treated - control gap'
+        ))
+        fig.add_hline(y=0, line_color='black', line_width=1)
+        fig.add_vline(
+            x=-0.5, line_dash="dash", line_color=self.color_palette['neutral'],
+            annotation_text="Treatment starts"
+        )
+        fig.update_layout(
+            title="Event Study: Gap Relative to the Last Pre-Treatment Period",
+            xaxis_title="Periods Since Treatment",
+            yaxis_title="Treated - Control Gap",
+            template='plotly_white',
+            height=450
+        )
+        return fig
+    
     def plot_did_trends(
         self,
         group_time_means: pd.DataFrame

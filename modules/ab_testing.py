@@ -10,8 +10,10 @@ from statsmodels.stats.power import tt_ind_solve_power, zt_ind_solve_power
 from statsmodels.stats.proportion import proportions_ztest, proportion_effectsize
 from typing import Dict, Tuple, Optional, List
 
+from .ab_advanced import AdvancedABMethods, relative_lift_interval
 
-class ABTestingEngine:
+
+class ABTestingEngine(AdvancedABMethods):
     """Comprehensive A/B testing engine with multiple statistical methods"""
     
     def __init__(self):
@@ -110,6 +112,9 @@ class ABTestingEngine:
             'ci_lower': float(ci_lower),
             'ci_upper': float(ci_upper),
             'relative_lift': float(relative_lift),
+            **{k: v for k, v in relative_lift_interval(
+                control_mean, treatment_mean, var_c / n_c, var_t / n_t, alpha
+            ).items() if k != 'relative_lift' and not np.isnan(v)},
             'significant': bool(p_value < alpha),
             'alpha': alpha
         }
@@ -183,6 +188,10 @@ class ABTestingEngine:
             'ci_lower': float(ci_lower),
             'ci_upper': float(ci_upper),
             'relative_lift': float(relative_lift),
+            **{k: v for k, v in relative_lift_interval(
+                control_mean, treatment_mean,
+                control_std**2 / len(control), treatment_std**2 / len(treatment), alpha
+            ).items() if k != 'relative_lift' and not np.isnan(v)},
             'significant': bool(p_value < alpha),
             'alpha': alpha
         }
@@ -363,6 +372,11 @@ class ABTestingEngine:
         
         prob_treatment_better = np.mean(treatment_samples > control_samples)
         
+        # Expected loss: how much conversion rate you give up, on average, if you
+        # pick one arm and the other was actually better
+        loss_if_ship_treatment = np.mean(np.maximum(control_samples - treatment_samples, 0))
+        loss_if_keep_control = np.mean(np.maximum(treatment_samples - control_samples, 0))
+        
         # Expected lift
         lift_samples = (treatment_samples - control_samples) / control_samples
         expected_lift = np.mean(lift_samples) * 100
@@ -381,6 +395,8 @@ class ABTestingEngine:
             'expected_lift': float(expected_lift),
             'lift_ci_lower': float(lift_ci_lower),
             'lift_ci_upper': float(lift_ci_upper),
+            'expected_loss_treatment': float(loss_if_ship_treatment),
+            'expected_loss_control': float(loss_if_keep_control),
             'control_n': int(control_total),
             'treatment_n': int(treatment_total)
         }
