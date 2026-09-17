@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from modules import ABTestingEngine, CausalInferenceLab
+from modules.experiment_design import to_unit_level
 
 warnings.filterwarnings("ignore")
 engine, lab = ABTestingEngine(), CausalInferenceLab()
@@ -98,6 +99,27 @@ for _ in range(sims_iv):
     ols_covered += abs(r['ols_estimate'] - 2.0) < 0.1
 record("2SLS 95% CI coverage with an unobserved confounder", "95%",
        f"{covered / sims_iv:.1%}", f"OLS within ±0.1 of truth: {ols_covered / sims_iv:.1%}")
+
+# 7. Analysing at the unit of randomization
+rng = np.random.default_rng(3)
+sims_unit = 400
+row_level = unit_level = 0
+for _ in range(sims_unit):
+    arm = rng.permutation(np.repeat(['control', 'treatment'], 150))
+    level = rng.normal(50, 15, 300)
+    sessions = rng.integers(1, 12, 300)
+    df = pd.DataFrame({
+        'user_id': np.repeat(np.arange(300), sessions),
+        'variant': np.repeat(arm, sessions),
+        'spend': np.repeat(level, sessions) + rng.normal(0, 3, sessions.sum()),
+    })
+    row_level += engine.t_test(df[df.variant == 'control'].spend.values,
+                               df[df.variant == 'treatment'].spend.values)['significant']
+    units, _ = to_unit_level(df, 'user_id', 'variant', ['spend'])
+    unit_level += engine.t_test(units[units.variant == 'control'].spend.values,
+                                units[units.variant == 'treatment'].spend.values)['significant']
+record("False-positive rate when users are randomized but rows are sessions", "5%",
+       f"{unit_level / sims_unit:.1%} (one row per user)", f"sessions treated as independent: {row_level / sims_unit:.1%}")
 
 table = pd.DataFrame(rows)
 print("| " + " | ".join(table.columns) + " |")

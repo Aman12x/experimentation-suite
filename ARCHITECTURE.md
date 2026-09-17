@@ -44,6 +44,8 @@ Method-specific extras sit alongside (`variance_reduction_pct` for CUPED, `looks
 | Partial F for instrument strength | The overall first-stage F also credits the covariates, so a useless instrument can look strong |
 | Matched-pair standard errors for PSM | Matched units are not independent samples |
 | Two-period DiD reports parallel trends as untestable | A gap in levels is allowed; only trends matter, and two periods carry no trend information |
+| Analysis runs at the unit of randomization | Rows from the same user are correlated; treating sessions as independent users makes standard errors too small |
+| The test defaults to Auto | The metric's type decides the test (rate → proportions, mean → Welch, heavy tail → bootstrap), so a user cannot silently pair a yes/no metric with the wrong test |
 | Missing values raise | A NaN would otherwise propagate into a NaN statistic |
 
 ## Decision precedence

@@ -12,10 +12,11 @@ Open http://localhost:8501.
 ## First analysis: a three-arm test with a guardrail
 
 1. In the sidebar, under **Or try a sample dataset**, pick **Multi-variant checkout test (CUPED, guardrails)**.
-2. Open the **🧪 A/B Testing** tab. `variant` and `control` are selected for you.
-3. Set **Metric Column** to `revenue`.
-4. Under **Guardrail Metrics**, add `page_load_ms`, and add it again under **Metrics Where Lower Is Better**.
-5. Click **🚀 Run A/B Test**.
+2. Open the **🧪 A/B Testing** tab. Step 1 is filled in from the data: unit `user_id`, assignment `variant`, control arm `control`.
+3. In step 2, set **Primary Metric** to `revenue` and leave **A Win Is When It Goes** on ▲ Up.
+4. In step 3, add `page_load_ms` as a guardrail and mark it as harmed when it goes ▲ Up.
+5. Read the blue **Your experiment, as it will be analyzed** box. If that sentence is not your experiment, fix the inputs before running.
+6. Click **🚀 Run A/B Test**.
 
 What to look for:
 - **Health checks** run first. A sample ratio mismatch would invalidate everything below it.
@@ -24,7 +25,7 @@ What to look for:
 
 ## See CUPED tighten an interval
 
-Same dataset. Untick **Compare all variants against control**, set **Treatment Group** to `one_page_checkout`, **Test Type** to **CUPED (variance reduction)**, and **Pre-Experiment Covariate** to `pre_revenue`. The plain t-test on this arm is not significant; with CUPED it is.
+Same dataset. Untick **Compare all variants against control**, set **Treatment Arm** to `one_page_checkout`, **Statistical Test** to **CUPED (variance reduction)**, and **Pre-Experiment Covariate** to `pre_revenue`. The plain t-test on this arm is not significant; with CUPED it is.
 
 ## Difference-in-differences with a pre-trend test
 
@@ -39,7 +40,7 @@ The event-study chart should show pre-treatment gaps around zero and a jump at t
 
 ## Your own data
 
-Upload a CSV or Parquet file with one row per unit. A/B tests need a group column and a numeric metric. Tests marked for binary metrics (Proportions, Chi-Squared, Bayesian) need a 0/1 column.
+Upload a CSV or Parquet file. A/B tests need an assignment column and a numeric metric. One row per unit is ideal; if you have several rows per user, pick the user ID as the **Unit of Randomization** and the app combines them. Leave **Statistical Test** on Auto unless you have a reason not to.
 
 ## Reading the results
 

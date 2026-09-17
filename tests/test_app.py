@@ -43,12 +43,12 @@ def test_control_group_is_control_even_when_treatment_rows_come_first():
     """ecommerce_ab_test.csv starts with a treatment row; lift must still be treatment vs control"""
     at = load_app("E-commerce A/B test (funnel)")
     
-    control = next(s for s in at.selectbox if s.label == "Control Group")
-    treatment = next(s for s in at.selectbox if s.label == "Treatment Group")
+    control = next(s for s in at.selectbox if s.label.startswith("Control Arm"))
+    treatment = next(s for s in at.selectbox if s.label.startswith("Treatment Arm"))
     assert control.value == "control"
     assert treatment.value == "treatment"
     
-    select(at, "Metric Column", "order_value").run()
+    select(at, "Primary Metric", "order_value").run()
     at = click(at, "Run A/B Test")
     assert not at.exception
     
@@ -68,8 +68,8 @@ def test_control_group_is_control_even_when_treatment_rows_come_first():
 ])
 def test_every_ab_test_type_runs(test_type, metric):
     at = load_app("A/B test (revenue, conversion)")
-    select(at, "Metric Column", metric)
-    select(at, "Test Type", test_type).run()
+    select(at, "Primary Metric", metric)
+    select(at, "Statistical Test", test_type).run()
     at = click(at, "Run A/B Test")
     assert not at.exception
     assert not at.error
@@ -79,8 +79,8 @@ def test_every_ab_test_type_runs(test_type, metric):
 def test_binary_only_test_refuses_continuous_metric():
     """Used to silently median-split revenue into a fake conversion metric"""
     at = load_app("A/B test (revenue, conversion)")
-    select(at, "Metric Column", "revenue")
-    select(at, "Test Type", "Chi-Squared").run()
+    select(at, "Primary Metric", "revenue")
+    select(at, "Statistical Test", "Chi-Squared").run()
     at = click(at, "Run A/B Test")
     assert not at.exception
     assert any("needs a 0/1 metric" in e.value for e in at.error)
@@ -93,9 +93,9 @@ MULTI = "Multi-variant checkout test (CUPED, guardrails)"
 def test_multi_variant_flow_corrects_and_blocks_on_guardrail():
     """express_pay wins on revenue but slows pages; the decision must catch that"""
     at = load_app(MULTI)
-    select(at, "Metric Column", "revenue").run()
+    select(at, "Primary Metric", "revenue").run()
     next(m for m in at.multiselect if m.label.startswith("Guardrail")).select("page_load_ms").run()
-    next(m for m in at.multiselect if m.label.startswith("Metrics Where Lower")).select("page_load_ms").run()
+    next(r for r in at.radio if r.label.startswith("page_load_ms is harmed")).set_value("▲ Up").run()
     at = click(at, "Run A/B Test")
     
     assert not at.exception
@@ -109,8 +109,8 @@ def test_multi_variant_flow_corrects_and_blocks_on_guardrail():
 @pytest.mark.integration
 def test_cuped_flow_reports_variance_reduction():
     at = load_app(MULTI)
-    select(at, "Metric Column", "revenue")
-    select(at, "Test Type", "CUPED (variance reduction)").run()
+    select(at, "Primary Metric", "revenue")
+    select(at, "Statistical Test", "CUPED (variance reduction)").run()
     select(at, "Pre-Experiment Covariate", "pre_revenue").run()
     at = click(at, "Run A/B Test")
     
@@ -189,10 +189,96 @@ def test_iv_runs_and_reports_interpretation():
 @pytest.mark.parametrize("export_format", ["Excel", "Markdown", "HTML"])
 def test_export_after_ab_test(export_format):
     at = load_app("A/B test (revenue, conversion)")
-    select(at, "Metric Column", "revenue").run()
+    select(at, "Primary Metric", "revenue").run()
     at = click(at, "Run A/B Test")
     
     next(r for r in at.radio if r.label == "Export Format").set_value(export_format).run()
     at = click(at, "Generate Export")
     assert not at.exception
     assert not at.error
+
+
+# =============== GUIDED DESIGN FLOW ===============
+
+def markdown_text(at):
+    return " ".join(m.value for m in at.markdown)
+
+
+@pytest.mark.integration
+def test_design_defaults_are_inferred_from_the_data():
+    at = load_app(MULTI)
+    unit = next(s for s in at.selectbox if s.label == "Unit of Randomization")
+    assignment = next(s for s in at.selectbox if s.label == "Assignment Column")
+    metric = next(s for s in at.selectbox if s.label == "Primary Metric")
+    
+    assert unit.value == "user_id"
+    assert assignment.value == "variant"
+    assert "user_id" not in metric.options      # an ID is never offered as a metric
+    assert any("One row per" in s.value for s in at.success)
+
+
+@pytest.mark.integration
+def test_auto_test_follows_the_metric_type():
+    at = load_app("A/B test (revenue, conversion)")
+    select(at, "Primary Metric", "conversion").run()
+    assert "Using **Proportions Z-Test**" in markdown_text(at)
+    assert "rate" in markdown_text(at)
+    
+    select(at, "Primary Metric", "revenue").run()
+    assert "Using **T-Test**" in markdown_text(at)
+    
+    at = click(at, "Run A/B Test")
+    assert not at.exception
+    assert not at.error
+
+
+@pytest.mark.integration
+def test_mismatched_test_is_called_out_before_running():
+    at = load_app("A/B test (revenue, conversion)")
+    select(at, "Primary Metric", "conversion")
+    select(at, "Statistical Test", "T-Test").run()
+    assert any("yes/no metric" in w.value for w in at.warning)
+    
+    select(at, "Primary Metric", "revenue")
+    select(at, "Statistical Test", "Chi-Squared").run()
+    assert any("needs a yes/no" in e.value for e in at.error)
+
+
+@pytest.mark.integration
+def test_summary_states_the_experiment_in_words():
+    at = load_app(MULTI)
+    select(at, "Primary Metric", "revenue").run()
+    next(m for m in at.multiselect if m.label.startswith("Guardrail")).select("page_load_ms").run()
+    next(r for r in at.radio if r.label.startswith("page_load_ms is harmed")).set_value("▲ Up").run()
+    
+    summary = next(i.value for i in at.info if "as it will be analyzed" in i.value)
+    assert "6,000 user_id units" in summary
+    assert "**control** is the baseline" in summary
+    assert "mean of **revenue**" in summary
+    assert "**page_load_ms** must not rise" in summary
+    assert "holm-corrected" in summary
+
+
+@pytest.mark.integration
+def test_primary_metric_where_down_is_a_win():
+    """page_load_ms rises in express_pay; with 'down is a win' that must not be shipped"""
+    at = load_app(MULTI)
+    select(at, "Primary Metric", "page_load_ms").run()
+    next(r for r in at.radio if r.label == "A Win Is When It Goes").set_value("▼ Down").run()
+    next(c for c in at.checkbox if c.label.startswith("Compare all")).uncheck().run()
+    select(at, "Treatment Arm (the change being tested)", "express_pay").run()
+    at = click(at, "Run A/B Test")
+    
+    assert not at.exception
+    assert [e.value for e in at.error] == ["**DO NOT SHIP**"]
+
+
+@pytest.mark.integration
+def test_planned_split_feeds_the_sample_ratio_check():
+    at = load_app("A/B test (revenue, conversion)")
+    select(at, "Primary Metric", "revenue").run()
+    next(n for n in at.number_input if n.label.startswith("Planned Traffic")).set_value(80.0).run()
+    at = click(at, "Run A/B Test")
+    
+    assert not at.exception
+    assert "SAMPLE RATIO MISMATCH" in markdown_text(at)

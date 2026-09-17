@@ -22,6 +22,13 @@ An A/B testing and causal inference toolkit that answers the question a product 
 - Bayesian Beta-Binomial test with probability of being better, credible interval on lift, and expected loss per arm
 - Power analysis and sample-size calculator
 
+**Guided experiment definition**
+- The app asks four design questions instead of showing a wall of column pickers: *who was randomized, what are you trying to move, what must not break, how should it be analyzed*
+- **Unit of randomization**: pick the ID of whatever was assigned. If the table has several rows per unit (sessions, orders), they are combined to one row per unit before testing, and units seen in more than one arm are dropped as contaminated
+- **One primary metric**, with its direction (up or down is a win) stated explicitly. The app says what the metric is (a rate, a mean, a heavy-tailed count) and picks the matching test; a mismatched manual choice is called out before it runs
+- Planned traffic split feeds the sample ratio check
+- A plain-English statement of the experiment is shown before you run it
+
 **Decision layer**
 - Guardrail metrics, each with its own direction (higher or lower is better)
 - A single verdict with reasons: `SHIP`, `DO NOT SHIP`, `KEEP RUNNING`, `STOP - NO MEANINGFUL EFFECT`, or `INVALID - FIX THE EXPERIMENT`
@@ -51,6 +58,7 @@ An A/B testing and causal inference toolkit that answers the question a product 
 | Chance of any false win, 5 null variants | ≤ 5% | 3.2% | uncorrected: 18.5% |
 | False-positive rate with 20 interim looks | ≤ 5% | 1.2% | peeking at fixed-horizon p: 25.4% |
 | 2SLS 95% CI coverage with an unobserved confounder | 95% | 95.0% | OLS within ±0.1 of truth: 0.0% |
+| False-positive rate when users are randomized but rows are sessions | 5% | 4.5% (one row per user) | sessions treated as independent: 45.2% |
 
 The same properties are enforced with tolerances in `tests/`, so a regression in any of them fails CI.
 
@@ -175,6 +183,7 @@ modules/
   ab_advanced.py        Proportions, lift CI, CUPED, bootstrap, multi-variant, sequential
   causal_inference.py   PSM, DiD, event study, IV
   health_checks.py      SRM and data-quality checks
+  experiment_design.py  Unit-level aggregation, metric typing, test recommendation
   data_handler.py       Loading and validation
   visualizations.py     Plotly charts
 utils/

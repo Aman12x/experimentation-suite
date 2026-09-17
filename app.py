@@ -16,9 +16,14 @@ from modules import (
     Visualizer
 )
 from modules.ab_advanced import is_binary_metric
+from modules.experiment_design import (
+    ROW_IS_UNIT, guess_unit_column, guess_assignment_column, guess_control_label,
+    metric_candidates, describe_metric, to_unit_level, experiment_summary
+)
 from utils import StatisticalInterpreter, ReportGenerator, ship_decision
 
 BINARY_ONLY_TESTS = ('Proportions Z-Test', 'Chi-Squared', 'Bayesian')
+AUTO_TEST = 'Auto (recommended for this metric)'
 TEST_TYPES = [
     'T-Test', 'Z-Test', 'Proportions Z-Test', 'Chi-Squared', 'Bayesian',
     'Mann-Whitney U', 'Bootstrap', 'CUPED (variance reduction)', 'Sequential (always-valid)'
@@ -226,63 +231,65 @@ if has_data:
     with tab2:
         st.header("🧪 A/B Testing Engine")
         
-        # Configuration
-        with st.expander("⚙️ Test Configuration", expanded=True):
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                group_col = st.selectbox(
-                    "Group Column",
-                    options=st.session_state.data_handler.categorical_columns,
-                    help="Column containing control/treatment assignments"
-                )
-            
-            with col2:
-                metric_col = st.selectbox(
-                    "Metric Column",
-                    options=st.session_state.data_handler.numeric_columns,
-                    help="Numeric metric to analyze"
-                )
-            
-            with col3:
-                test_type = st.selectbox(
-                    "Test Type",
-                    options=TEST_TYPES,
-                    help="Statistical test to perform"
-                )
-            
-            cfg_col1, cfg_col2 = st.columns(2)
-            
-            with cfg_col1:
-                group_values = (
-                    st.session_state.data_handler.data[group_col].dropna().unique().tolist()
-                    if group_col else []
-                )
-                default_control = next(
-                    (i for i, g in enumerate(group_values)
-                     if str(g).lower() in ('control', 'ctrl', 'baseline', 'a')),
-                    0
-                )
-                control_group = st.selectbox(
-                    "Control Group",
-                    options=group_values,
-                    index=default_control,
-                    help="Which value of the group column is the control"
-                )
-            
-            with cfg_col2:
-                treatment_options = [g for g in group_values if g != control_group]
-                treatment_group = st.selectbox(
-                    "Treatment Group",
-                    options=treatment_options,
-                    help="Which value of the group column is the treatment"
-                )
-            
-            assume_equal_var = st.checkbox(
-                "Assume equal variances (Student's t-test)",
-                value=False,
-                help="Off = Welch's t-test, which stays valid when variances or group sizes differ"
+        data = st.session_state.data_handler.data
+        all_columns = data.columns.tolist()
+        
+        # ---------- 1. Who was randomized? ----------
+        with st.container(border=True):
+            st.subheader("1️⃣ Who was randomized?")
+            st.caption(
+                "The unit of randomization is whatever was assigned to an arm: usually a user, sometimes "
+                "a device, session, or store. Every unit must count once, or the test is overconfident."
             )
+            
+            unit_guess = guess_unit_column(data)
+            unit_options = [ROW_IS_UNIT] + all_columns
+            r_col1, r_col2 = st.columns(2)
+            with r_col1:
+                unit_choice = st.selectbox(
+                    "Unit of Randomization",
+                    options=unit_options,
+                    index=unit_options.index(unit_guess) if unit_guess else 0,
+                    help="The ID column of the thing that was randomly assigned (user_id, store_id). "
+                         "If the table has several rows per unit, they are combined before testing."
+                )
+            unit_col = None if unit_choice == ROW_IS_UNIT else unit_choice
+            
+            assignment_options = [
+                c for c in all_columns
+                if c != unit_col and 2 <= data[c].nunique(dropna=True) <= 10
+            ]
+            if not assignment_options:
+                st.error(
+                    "❌ No column looks like an arm assignment (2 to 10 distinct values). "
+                    "A/B analysis needs one, e.g. a 'variant' column with 'control' and 'treatment'."
+                )
+                st.stop()
+            assignment_guess = guess_assignment_column(data, exclude=unit_col)
+            with r_col2:
+                group_col = st.selectbox(
+                    "Assignment Column",
+                    options=assignment_options,
+                    index=assignment_options.index(assignment_guess) if assignment_guess in assignment_options else 0,
+                    help="The column recording which arm each unit was assigned to"
+                )
+            
+            group_values = data[group_col].dropna().unique().tolist() if group_col else []
+            
+            a_col1, a_col2 = st.columns(2)
+            with a_col1:
+                control_group = st.selectbox(
+                    "Control Arm (baseline experience)",
+                    options=group_values,
+                    index=guess_control_label(group_values),
+                    help="Lift is always reported as the other arm relative to this one"
+                )
+            with a_col2:
+                treatment_group = st.selectbox(
+                    "Treatment Arm (the change being tested)",
+                    options=[g for g in group_values if g != control_group],
+                    help="The arm whose effect you want to measure"
+                )
             
             compare_all = False
             correction = 'holm'
@@ -290,7 +297,7 @@ if has_data:
                 mv_col1, mv_col2 = st.columns(2)
                 with mv_col1:
                     compare_all = st.checkbox(
-                        "Compare all variants against control",
+                        f"Compare all {len(group_values) - 1} variants against control",
                         value=True,
                         help="Tests every variant and corrects p-values for the number of comparisons"
                     )
@@ -302,42 +309,181 @@ if has_data:
                              "fdr_bh controls the share of false wins"
                     )
             
+            arms_in_test = group_values if compare_all else [control_group, treatment_group]
+            s_col1, s_col2 = st.columns(2)
+            with s_col1:
+                control_share = st.number_input(
+                    "Planned Traffic to Control (%)",
+                    min_value=1.0, max_value=99.0,
+                    value=round(100.0 / max(len(arms_in_test), 2), 1), step=1.0,
+                    help="What the experiment was configured to send to control. The remaining traffic is "
+                         "assumed to be split evenly across the other arms. Used to detect a sample ratio mismatch."
+                )
+            
+            # Rows per unit decide whether aggregation is needed
+            agg = 'mean'
+            if unit_col:
+                rows_per_unit = data.groupby(unit_col).size()
+                if (rows_per_unit > 1).any():
+                    with s_col2:
+                        agg_label = st.selectbox(
+                            "Combine a Unit's Rows By",
+                            options=['Average', 'Total', 'Any (max)'],
+                            help="Average: typical value per row. Total: sum over the experiment "
+                                 "(revenue per user). Any: did it ever happen (converted at least once)."
+                        )
+                    agg = {'Average': 'mean', 'Total': 'sum', 'Any (max)': 'max'}[agg_label]
+                    st.warning(
+                        f"⚠️ **{unit_col}** repeats: {len(rows_per_unit):,} units across {len(data):,} rows "
+                        f"(up to {int(rows_per_unit.max())} rows each). Rows from the same unit are not independent, "
+                        "so they are combined into one value per unit before testing."
+                    )
+                else:
+                    st.success(f"✅ One row per **{unit_col}**: {len(rows_per_unit):,} independent units.")
+            else:
+                st.info(
+                    f"ℹ️ Treating each of the {len(data):,} rows as an independent unit. If a user can appear "
+                    "on several rows, pick their ID column above instead."
+                )
+        
+        # ---------- 2. What are you trying to move? ----------
+        with st.container(border=True):
+            st.subheader("2️⃣ What are you trying to move?")
+            st.caption(
+                "Pick ONE primary metric before looking at results. It is the only metric the ship decision "
+                "is based on. Everything else is a guardrail or context."
+            )
+            
+            metric_options = metric_candidates(data, unit_col, group_col)
+            m_col1, m_col2 = st.columns(2)
+            with m_col1:
+                metric_col = st.selectbox(
+                    "Primary Metric",
+                    options=metric_options,
+                    help="The single outcome this experiment was designed to change"
+                )
+            with m_col2:
+                primary_direction = st.radio(
+                    "A Win Is When It Goes",
+                    options=['▲ Up', '▼ Down'],
+                    horizontal=True,
+                    help="Up for conversion or revenue. Down for churn, latency, or error rate."
+                )
+            
+            metric_info = describe_metric(data[metric_col]) if metric_col else None
+            if metric_info:
+                st.markdown(f"📐 **{metric_col}** is {metric_info['summary']}.")
+            
+            mde_pct = st.number_input(
+                "Smallest Lift Worth Shipping (% relative to control)",
+                value=2.0, min_value=0.0, step=0.5,
+                help="Relative, not percentage points: 2 means control 5.0% → 5.1%. A result whose whole "
+                     "confidence interval sits below this is called 'no meaningful effect' instead of 'keep running'."
+            )
+        
+        # ---------- 3. What must not break? ----------
+        with st.container(border=True):
+            st.subheader("3️⃣ What must not break? (optional)")
+            st.caption(
+                "Guardrails are metrics you are not trying to improve but refuse to damage. "
+                "A significant move in the bad direction blocks shipping even if the primary metric wins."
+            )
+            guardrail_cols = st.multiselect(
+                "Guardrail Metrics",
+                options=[c for c in metric_options if c != metric_col],
+                help="e.g. page load time, refunds, support tickets, unsubscribe rate"
+            )
+            guardrail_up_is_good = {}
+            for g_col in guardrail_cols:
+                bad_direction = st.radio(
+                    f"{g_col} is harmed when it goes",
+                    options=['▼ Down', '▲ Up'],
+                    horizontal=True,
+                    key=f"guardrail_direction_{g_col}",
+                    help="Down for things you want to keep high (retention). Up for things you want to keep low (latency)."
+                )
+                guardrail_up_is_good[g_col] = bad_direction == '▼ Down'
+        
+        lower_is_better = (
+            ([metric_col] if primary_direction == '▼ Down' else [])
+            + [g for g, up_is_good in guardrail_up_is_good.items() if not up_is_good]
+        )
+        
+        # ---------- 4. How should it be analyzed? ----------
+        with st.container(border=True):
+            st.subheader("4️⃣ How should it be analyzed?")
+            
+            test_choice = st.selectbox(
+                "Statistical Test",
+                options=[AUTO_TEST] + TEST_TYPES,
+                help="Auto picks the test that matches the metric's type. Override only if you have a reason."
+            )
+            test_type = metric_info['recommended_test'] if test_choice == AUTO_TEST and metric_info else test_choice
+            if test_choice == AUTO_TEST and metric_info:
+                st.markdown(f"🧭 Using **{test_type}**. {metric_info['reason']}")
+            elif metric_info and test_type in BINARY_ONLY_TESTS and metric_info['kind'] != 'binary':
+                st.error(f"❌ {test_type} needs a yes/no (0/1) metric. **{metric_col}** is not one.")
+            elif metric_info and metric_info['kind'] == 'binary' and test_type in ('T-Test', 'Z-Test'):
+                st.warning(
+                    f"⚠️ **{metric_col}** is a yes/no metric. {test_type} will run, but a Proportions Z-Test "
+                    "is the standard choice for rates."
+                )
+            
             cuped_covariate = None
             if test_type == 'CUPED (variance reduction)':
                 cuped_covariate = st.selectbox(
                     "Pre-Experiment Covariate",
-                    options=[c for c in st.session_state.data_handler.numeric_columns if c != metric_col],
-                    help="Measured before assignment (e.g. last month's spend). "
-                         "The more it correlates with the metric, the more noise CUPED removes."
+                    options=[c for c in metric_options if c != metric_col],
+                    help="Must be measured BEFORE assignment (e.g. last month's spend), so the treatment "
+                         "cannot have affected it. The more it correlates with the metric, the more noise it removes."
                 )
             
-            gr_col1, gr_col2 = st.columns(2)
-            with gr_col1:
-                guardrail_cols = st.multiselect(
-                    "Guardrail Metrics (Optional)",
-                    options=[c for c in st.session_state.data_handler.numeric_columns if c != metric_col],
-                    help="Metrics that must not get worse, e.g. latency, refunds, support tickets"
+            with st.expander("Advanced settings"):
+                alpha = st.slider(
+                    "Significance Level (α)",
+                    min_value=0.01,
+                    max_value=0.10,
+                    value=0.05,
+                    step=0.01,
+                    help="How often you accept calling a win when nothing changed. 0.05 is the convention."
                 )
-            with gr_col2:
-                lower_is_better = st.multiselect(
-                    "Metrics Where Lower Is Better",
-                    options=[metric_col] + guardrail_cols,
-                    help="e.g. page load time, churn"
-                )
-            
-            mde_pct = st.number_input(
-                "Smallest Lift Worth Shipping (%)",
-                value=2.0, min_value=0.0, step=0.5,
-                help="Used to tell 'keep running' apart from 'stop, there is nothing here'"
+                assume_equal_var = False
+                if test_type == 'T-Test':
+                    assume_equal_var = st.checkbox(
+                        "Assume equal variances (Student's t-test)",
+                        value=False,
+                        help="Leave off. Welch's t-test stays valid when variances or arm sizes differ; "
+                             "Student's does not."
+                    )
+        
+        # ---------- Experiment as it will be analyzed ----------
+        unit_label = f"{unit_col} units" if unit_col else "rows"
+        if metric_col and treatment_group is not None:
+            arm_counts = (
+                data[data[group_col].isin(arms_in_test)]
+                .groupby(group_col)[unit_col if unit_col else group_col]
+                .agg('nunique' if unit_col else 'size')
             )
-            
-            alpha = st.slider(
-                "Significance Level (α)",
-                min_value=0.01,
-                max_value=0.10,
-                value=0.05,
-                step=0.01,
-                help="Probability of Type I error"
+            arm_counts = {str(a): int(arm_counts.get(a, 0)) for a in arms_in_test}
+            other_share = (100.0 - control_share) / max(len(arms_in_test) - 1, 1)
+            expected_split = {
+                str(a): (control_share if a == control_group else other_share) / 100.0 for a in arms_in_test
+            }
+            st.info(
+                "**Your experiment, as it will be analyzed**\n\n" + experiment_summary(
+                    unit_label=unit_label,
+                    n_units=sum(arm_counts.values()),
+                    arms=arm_counts,
+                    control=str(control_group),
+                    metric=metric_col,
+                    metric_kind=metric_info['kind'],
+                    higher_is_better=primary_direction == '▲ Up',
+                    mde_pct=mde_pct if mde_pct > 0 else None,
+                    test_name=test_type if not compare_all else f"{test_type}, {correction}-corrected across variants",
+                    alpha=alpha,
+                    guardrails=guardrail_up_is_good,
+                    expected_split=expected_split
+                )
             )
         
         # Validate and run test
@@ -355,9 +501,21 @@ if has_data:
             else:
                 with st.spinner("Running analysis..."):
                     # Prepare data
-                    raw = st.session_state.data_handler.data
                     extra_cols = [c for c in [cuped_covariate] + guardrail_cols if c]
-                    full = raw[[group_col, metric_col] + extra_cols].dropna(subset=[group_col, metric_col])
+                    unit_df, unit_info = to_unit_level(
+                        data, unit_col, group_col, [metric_col] + extra_cols, agg=agg
+                    )
+                    if unit_info['n_contaminated_units']:
+                        st.warning(
+                            f"⚠️ {unit_info['n_contaminated_units']:,} units appear in more than one arm "
+                            "and were excluded. They saw both experiences, so they cannot be attributed to either."
+                        )
+                    if unit_info['aggregated']:
+                        st.info(
+                            f"ℹ️ Combined {unit_info['n_rows']:,} rows into {unit_info['n_units']:,} "
+                            f"units (one per {unit_col}, by {agg})."
+                        )
+                    full = unit_df.dropna(subset=[group_col, metric_col])
                     n_groups = full[group_col].nunique()
                     multi = compare_all and n_groups > 2
                     
@@ -371,7 +529,8 @@ if has_data:
                     # Run health checks
                     st.subheader("🏥 Health Checks")
                     health_results = st.session_state.health_checker.run_all_checks(
-                        df, group_col, metric_col
+                        df, group_col, metric_col,
+                        expected_ratio={a: expected_split[str(a)] for a in arms_in_test}
                     )
                     
                     if health_results['overall_health']:
