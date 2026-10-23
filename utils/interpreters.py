@@ -297,19 +297,37 @@ class StatisticalInterpreter:
             Plain English interpretation
         """
         total_n = power_results.get('total_sample_size', 0)
+        n_control = power_results.get('n_control', total_n // 2)
+        n_treatment = power_results.get('n_treatment', total_n - total_n // 2)
         mde = power_results.get('mde_percentage', 0)
         power = power_results.get('power', 0.8)
-        
-        return (
+
+        text = (
             f"## 📏 Sample Size Recommendation\n\n"
             f"To detect a **{mde:.1f}% change** with **{int(power*100)}% power**:\n\n"
             f"- **Total Sample Size Needed:** {total_n:,}\n"
-            f"- **Per Group:** ~{total_n//2:,} in control, ~{total_n//2:,} in treatment\n\n"
-            f"### What does this mean?\n\n"
+            f"- **Per Group:** {n_control:,} in control, {n_treatment:,} in treatment\n"
+        )
+        if 'recommended_days' in power_results:
+            days = power_results['days_to_reach_n']
+            weeks = power_results['recommended_weeks']
+            traffic = power_results['daily_traffic']
+            text += (
+                f"- **Run For:** {weeks} week{'s' if weeks != 1 else ''} "
+                f"({power_results['recommended_days']} days) at {traffic:,.0f} units/day\n"
+            )
+            if power_results.get('padded_for_whole_weeks'):
+                text += (
+                    f"  - The sample is reached in {days} day{'s' if days != 1 else ''}, but stopping "
+                    f"mid-week over-represents some weekdays, so plan whole weeks\n"
+                )
+        text += (
+            f"\n### What does this mean?\n\n"
             f"With this sample size, you'll have an {int(power*100)}% chance of detecting "
             f"a {mde:.1f}% effect if it truly exists. Running with fewer participants "
             f"increases the risk of missing a real effect (false negative)."
         )
+        return text
     
     @staticmethod
     def interpret_bayesian_results(results: Dict) -> str:

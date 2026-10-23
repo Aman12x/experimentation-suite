@@ -34,7 +34,7 @@ Bootstrap, Mann-Whitney and sequential tests need the values themselves. `analyz
 | `analyze_experiment` | From the result rows: test per variant (Holm-corrected when there are several), sample-ratio check, ship decision with reasons, plain-English interpretation. |
 | `decide_with_guardrails` | Combine a primary metric with guardrail metrics into one decision. |
 | `check_sample_ratio` | Traffic split check from units per arm. |
-| `plan_sample_size` | Units per arm for a target lift, from a baseline rate or mean and standard deviation. |
+| `plan_sample_size` | Units per arm for a target lift, from a baseline rate or mean and standard deviation. With `daily_traffic`, also the run length in whole weeks. |
 | `analyze_rows` | Bootstrap, Mann-Whitney, sequential or t-test on raw values, small samples only. |
 
 `plan_experiment_query` accepts only plain identifiers and ISO dates. There is no free-text `WHERE`, so an agent cannot be talked into emitting arbitrary SQL through it. Bad input comes back as a tool error whose message says what to fix.

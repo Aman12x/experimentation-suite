@@ -185,11 +185,14 @@ def plan_sample_size(
     baseline_rate: Optional[float] = None,
     alpha: float = 0.05,
     power: float = 0.80,
+    daily_traffic: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Units needed per arm to detect a relative lift of mde_pct percent.
+    """Units needed per arm to detect a relative lift of mde_pct percent, and how long to run.
 
     For a yes/no metric give baseline_rate (0.05 for 5% conversion). For a continuous metric
-    give baseline_mean and baseline_std.
+    give baseline_mean and baseline_std. Give daily_traffic (units entering the experiment per
+    day, all arms) to also get the run length: days to reach the sample, and a recommendation
+    rounded up to whole weeks so no weekday is over-represented.
     """
     if baseline_rate is not None:
         if not 0 < baseline_rate < 1:
@@ -197,7 +200,9 @@ def plan_sample_size(
         baseline_mean, baseline_std = baseline_rate, (baseline_rate * (1 - baseline_rate)) ** 0.5
     if baseline_mean is None or baseline_std is None:
         raise ValueError("Give baseline_rate, or both baseline_mean and baseline_std")
-    return engine.calculate_sample_size(baseline_mean, mde_pct, baseline_std, alpha=alpha, power=power)
+    return engine.calculate_sample_size(
+        baseline_mean, mde_pct, baseline_std, alpha=alpha, power=power, daily_traffic=daily_traffic
+    )
 
 
 @server.tool(title="Analyze raw values (small samples only)")

@@ -264,6 +264,48 @@ class TestABTestingEngine:
         
         assert results_2pct['total_sample_size'] > results_5pct['total_sample_size']
     
+    @pytest.mark.unit
+    def test_power_analysis_without_traffic_says_nothing_about_duration(self, engine):
+        results = engine.calculate_sample_size(baseline_mean=100, mde=5.0, baseline_std=20)
+        assert 'recommended_days' not in results and 'days_to_reach_n' not in results
+
+    @pytest.mark.unit
+    def test_power_analysis_run_length_is_whole_weeks(self, engine):
+        """Days come from the sample and the traffic; the plan rounds up to whole weeks"""
+        results = engine.calculate_sample_size(
+            baseline_mean=100, mde=5.0, baseline_std=20, daily_traffic=100
+        )
+        total = results['total_sample_size']
+        assert results['days_to_reach_n'] == -(-total // 100)
+        assert results['recommended_days'] == results['recommended_weeks'] * 7
+        assert results['recommended_days'] >= results['days_to_reach_n']
+        assert results['recommended_days'] - results['days_to_reach_n'] < 7
+        assert results['padded_for_whole_weeks'] == (results['recommended_days'] > results['days_to_reach_n'])
+
+    @pytest.mark.unit
+    def test_power_analysis_never_recommends_under_a_week(self, engine):
+        """A huge site reaches the sample in a day; it should still run a full week"""
+        results = engine.calculate_sample_size(
+            baseline_mean=100, mde=5.0, baseline_std=20, daily_traffic=1e9
+        )
+        assert results['days_to_reach_n'] == 1
+        assert results['recommended_weeks'] == 1 and results['recommended_days'] == 7
+        assert results['padded_for_whole_weeks']
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("traffic", [0, -5, float('inf'), float('nan')])
+    def test_power_analysis_rejects_bad_traffic(self, engine, traffic):
+        with pytest.raises(ValueError, match="daily_traffic"):
+            engine.calculate_sample_size(100, 5.0, 20, daily_traffic=traffic)
+
+    @pytest.mark.unit
+    def test_duration_counts_both_arms_under_unequal_split(self, engine):
+        """A 1:3 split needs more total units, so more days at the same traffic"""
+        equal = engine.calculate_sample_size(100, 5.0, 20, ratio=1.0, daily_traffic=50)
+        skewed = engine.calculate_sample_size(100, 5.0, 20, ratio=3.0, daily_traffic=50)
+        assert skewed['total_sample_size'] > equal['total_sample_size']
+        assert skewed['days_to_reach_n'] > equal['days_to_reach_n']
+
     # =============== EDGE CASES ===============
     
     @pytest.mark.unit

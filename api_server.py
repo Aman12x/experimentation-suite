@@ -108,6 +108,9 @@ class PowerAnalysisRequest(BaseModel):
     alpha: float = Field(0.05, ge=0.01, le=0.10)
     power: float = Field(0.80, ge=0.5, le=0.99)
     ratio: float = Field(1.0, gt=0, description="Treatment to control ratio")
+    daily_traffic: Optional[float] = Field(
+        None, gt=0, description="Units entering the experiment per day, all arms; adds run length"
+    )
     
     class Config:
         json_schema_extra = {
@@ -464,7 +467,8 @@ async def run_power_analysis(request: PowerAnalysisRequest):
             baseline_std=request.baseline_std,
             alpha=request.alpha,
             power=request.power,
-            ratio=request.ratio
+            ratio=request.ratio,
+            daily_traffic=request.daily_traffic
         )
         return JSONResponse(content=results)
     except Exception as e:

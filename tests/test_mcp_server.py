@@ -162,6 +162,17 @@ async def test_sample_size_and_raw_rows_tools():
     assert rows["decision"] == "SHIP" and "looks" not in rows["result"]
 
 
+@pytest.mark.integration
+async def test_plan_sample_size_with_traffic_gives_run_length():
+    async with Client(mcp_server.server) as client:
+        bare = payload(await call(client, "plan_sample_size", mde_pct=10, baseline_rate=0.05))
+        timed = payload(await call(client, "plan_sample_size", mde_pct=10, baseline_rate=0.05,
+                                   daily_traffic=2000))
+    assert "recommended_days" not in bare
+    assert timed["days_to_reach_n"] == -(-timed["total_sample_size"] // 2000)
+    assert timed["recommended_days"] % 7 == 0 and timed["recommended_days"] >= timed["days_to_reach_n"]
+
+
 # =============== WHAT AN AGENT MUST NOT BE ABLE TO DO ===============
 
 @pytest.mark.integration

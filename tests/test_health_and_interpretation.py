@@ -144,3 +144,21 @@ def test_iv_interpretation_warns_on_weak_instrument():
 def test_unknown_causal_method_raises():
     with pytest.raises(ValueError):
         StatisticalInterpreter.interpret_causal_effect({}, "nope")
+
+
+# =============== SAMPLE SIZE INTERPRETATION ===============
+
+def test_power_interpretation_reports_actual_per_arm_counts():
+    """A 1:3 split is not half and half; the text must use the engine's own counts"""
+    results = ABTestingEngine().calculate_sample_size(100, 5.0, 20, ratio=3.0)
+    text = StatisticalInterpreter.interpret_power_analysis(results)
+    assert f"{results['n_control']:,} in control" in text
+    assert f"{results['n_treatment']:,} in treatment" in text
+    assert "Run For" not in text
+
+
+def test_power_interpretation_explains_whole_week_padding():
+    results = ABTestingEngine().calculate_sample_size(100, 5.0, 20, daily_traffic=1e9)
+    text = StatisticalInterpreter.interpret_power_analysis(results)
+    assert "Run For:** 1 week (7 days)" in text
+    assert "reached in 1 day," in text and "whole weeks" in text

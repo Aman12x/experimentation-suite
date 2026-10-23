@@ -140,6 +140,16 @@ class TestAPIEndpoints:
         assert "n_control" in data
         assert "n_treatment" in data
         assert data["total_sample_size"] > 0
+        assert "recommended_days" not in data
+
+        timed = client.post("/api/ab-test/power-analysis", json={**payload, "daily_traffic": 300})
+        assert timed.status_code == 200
+        timed = timed.json()
+        assert timed["days_to_reach_n"] == -(-timed["total_sample_size"] // 300)
+        assert timed["recommended_days"] % 7 == 0
+
+        bad = client.post("/api/ab-test/power-analysis", json={**payload, "daily_traffic": 0})
+        assert bad.status_code == 422
     
     @pytest.mark.integration
     def test_invalid_t_test_request(self):

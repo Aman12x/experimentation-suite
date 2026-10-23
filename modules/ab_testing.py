@@ -283,11 +283,12 @@ class ABTestingEngine(AdvancedABMethods, FromStatsMethods):
         baseline_std: float,
         alpha: float = 0.05,
         power: float = 0.80,
-        ratio: float = 1.0
+        ratio: float = 1.0,
+        daily_traffic: Optional[float] = None
     ) -> Dict:
         """
-        Calculate required sample size for A/B test
-        
+        Calculate required sample size for A/B test, and how long it takes to collect
+
         Args:
             baseline_mean: Mean of the control group
             mde: Minimum detectable effect as percentage (e.g., 5 for 5%)
@@ -295,7 +296,13 @@ class ABTestingEngine(AdvancedABMethods, FromStatsMethods):
             alpha: Significance level
             power: Statistical power (1 - beta)
             ratio: Treatment to control ratio
-            
+            daily_traffic: Units entering the experiment per day, across all arms.
+                When given, the result also says how many days the test needs.
+                The recommendation is rounded up to whole weeks, and never under
+                one week, because behaviour differs by weekday and a test that
+                covers part of a week over-represents some days (the same rule
+                the by-day health check enforces after the fact).
+
         Returns:
             Dictionary with sample size calculations
         """
@@ -319,17 +326,45 @@ class ABTestingEngine(AdvancedABMethods, FromStatsMethods):
         
         n_control = int(np.ceil(n_control))
         n_treatment = int(np.ceil(n_control * ratio))
-        
-        return {
+        total = n_control + n_treatment
+
+        result = {
             'n_control': n_control,
             'n_treatment': n_treatment,
-            'total_sample_size': n_control + n_treatment,
+            'total_sample_size': total,
             'cohens_d': float(cohens_d),
             'mde_absolute': float(effect_size),
             'mde_percentage': float(mde),
             'alpha': alpha,
             'power': power,
             'ratio': ratio
+        }
+        if daily_traffic is not None:
+            result.update(self.duration_from_traffic(total, daily_traffic))
+        return result
+
+    @staticmethod
+    def duration_from_traffic(total_sample_size: int, daily_traffic: float, min_weeks: int = 1) -> Dict:
+        """
+        Days needed to collect a sample, and the whole-weeks run length to plan for
+
+        Args:
+            total_sample_size: Units needed across all arms
+            daily_traffic: Units entering the experiment per day, across all arms
+            min_weeks: Shortest run worth planning, in weeks
+        """
+        if not np.isfinite(daily_traffic) or daily_traffic <= 0:
+            raise ValueError("daily_traffic must be a positive number of units per day")
+        if min_weeks < 1:
+            raise ValueError("min_weeks must be at least 1")
+        days_to_reach_n = int(np.ceil(total_sample_size / daily_traffic))
+        weeks = max(min_weeks, int(np.ceil(days_to_reach_n / 7)))
+        return {
+            'daily_traffic': float(daily_traffic),
+            'days_to_reach_n': days_to_reach_n,
+            'recommended_weeks': weeks,
+            'recommended_days': weeks * 7,
+            'padded_for_whole_weeks': weeks * 7 > days_to_reach_n
         }
     
     def bayesian_ab_test(

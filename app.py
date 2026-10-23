@@ -227,7 +227,7 @@ def render_power_calculator():
                 help="Smallest effect you want to detect"
             )
         
-        power_col1, power_col2 = st.columns(2)
+        power_col1, power_col2, power_col3 = st.columns(3)
         
         with power_col1:
             power = st.slider("Statistical Power", 0.70, 0.95, 0.80, 0.05)
@@ -235,10 +235,21 @@ def render_power_calculator():
         with power_col2:
             power_alpha = st.slider("Significance Level", 0.01, 0.10, 0.05, 0.01)
         
+        with power_col3:
+            daily_traffic = st.number_input(
+                "Daily Traffic (optional)",
+                value=0,
+                min_value=0,
+                step=100,
+                help="Units entering the experiment per day across all arms. "
+                     "Leave at 0 to skip the run-length estimate."
+            )
+        
         if st.button("Calculate Sample Size"):
             try:
                 power_results = st.session_state.ab_engine.calculate_sample_size(
-                    baseline_mean, mde, baseline_std, power_alpha, power
+                    baseline_mean, mde, baseline_std, power_alpha, power,
+                    daily_traffic=daily_traffic or None
                 )
             except Exception as e:
                 st.error(f"Error calculating sample size: {str(e)}")
